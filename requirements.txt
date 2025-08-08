@@ -1,0 +1,10 @@
+streamlit>=1.20
+psycopg2-binary
+python-dotenv
+passlib[bcrypt]
+sqlalchemy
+pandas
+scikit-learn
+python-docx
+PyPDF2
+tqdm
