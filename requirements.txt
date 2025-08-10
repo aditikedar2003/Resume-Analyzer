@@ -1,28 +1,9 @@
-# Core
 streamlit
 pdfplumber
 openai
 pandas
-requests
-python-dotenv
-
-# Database
-psycopg2-binary
-sqlalchemy
-
-# PDF/Doc Processing
+python-docx
 PyPDF2
-docx2txt
-
-# File handling
-beautifulsoup4
-
-# For Resume Parsing
-spacy
-nltk
-
-# For LinkedIn Optimization
-lxml
-
-# Optional utils
-tqdm
+requests
+sqlalchemy
+psycopg2-binary
