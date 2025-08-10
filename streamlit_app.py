@@ -2,10 +2,10 @@
 """
 Final single-file Resume Analyzer (session-only mode).
 - Single-page app with centered header navigation.
-- No st.experimental_rerun() used.
-- Resume/JD analysis (cosine similarity), keyword suggestions, ATS checks.
+- No database (session-only).
+- Resume/JD analysis (cosine similarity + keyword TF ranking).
 - PDF/DOCX extraction when libraries available.
-- Dashboard (session-only), Cover Letter drag/drop upload.
+- Jobscan-style professional UI and actionable suggestions.
 """
 
 import streamlit as st
@@ -14,6 +14,8 @@ from io import BytesIO
 import re
 import os
 import base64
+from collections import Counter, defaultdict
+import math
 
 # optional libs - import when available; otherwise fallback
 try:
@@ -26,13 +28,17 @@ try:
 except Exception:
     docx = None
 
+try:
+    from passlib.hash import bcrypt
+except Exception:
+    bcrypt = None  # not required for functionality; used only for cosmetic registration flows
+
 import numpy as np
-from passlib.hash import bcrypt
 
 # Page config
 st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="wide")
 
-# ---------- Utilities (unchanged core logic) ----------
+# ---------- Utilities: file extraction ----------
 def safe_extract_text_from_pdf(fbytes: bytes):
     if not PyPDF2:
         return ""
@@ -83,14 +89,27 @@ def extract_text_from_uploaded(uploaded_file):
         except Exception:
             return ""
 
-# tokenization & scoring
+# ---------- Tokenization & keyword extraction ----------
 TOKEN_RE = re.compile(r"\b[a-z0-9\+\#\-\.]+\b", re.I)
+
 def tokenize(s: str):
     if not s:
         return []
     s = s.lower()
     return TOKEN_RE.findall(s)
 
+def top_keywords(text: str, top_n=40, min_len=3, stopwords=None):
+    tokens = tokenize(text)
+    if stopwords is None:
+        stopwords = set([
+            "the","and","with","from","that","this","will","for","are","you","your","have",
+            "not","but","our","their","they","be","they","we","role","skills","responsibilities"
+        ])
+    filtered = [t for t in tokens if len(t) > min_len and t not in stopwords and not t.isdigit()]
+    counts = Counter(filtered)
+    return counts.most_common(top_n)
+
+# ---------- Vector building & cosine similarity ----------
 def build_term_vector(tokens, vocab_index):
     vec = np.zeros(len(vocab_index), dtype=float)
     for t in tokens:
@@ -100,7 +119,7 @@ def build_term_vector(tokens, vocab_index):
         return vec / np.linalg.norm(vec)
     return vec
 
-def compute_match_score(resume_text: str, jd_text: str):
+def compute_cosine_similarity(resume_text: str, jd_text: str):
     r_tokens = tokenize(resume_text)
     j_tokens = tokenize(jd_text)
     if not r_tokens or not j_tokens:
@@ -113,129 +132,144 @@ def compute_match_score(resume_text: str, jd_text: str):
     if denom == 0:
         return 0.0
     sim = float(np.dot(r_vec, j_vec))
-    return round(sim * 100, 2)
+    return float(sim)  # 0..1
 
-def get_keywords_and_missing(resume_text: str, jd_text: str, top_n=50):
-    r_words = set(tokenize(resume_text))
-    jd_words = set(tokenize(jd_text))
-    matched = sorted(list(jd_words & r_words))
-    missing = sorted(list(jd_words - r_words))
-    return matched[:top_n], missing[:top_n]
+# ---------- Keyword matching & prioritization ----------
+def get_matched_and_missing(resume_text: str, jd_text: str, top_n=200):
+    jd_top = top_keywords(jd_text, top_n)
+    jd_terms = [w for w, c in jd_top]
+    r_tokens = set(tokenize(resume_text))
+    matched = [w for w in jd_terms if w in r_tokens]
+    missing = [w for w in jd_terms if w not in r_tokens]
+    # also compute importance scores (freq in JD)
+    jd_freq = {w: c for w, c in jd_top}
+    # sort missing by jd freq desc
+    missing_sorted = sorted(missing, key=lambda w: jd_freq.get(w, 0), reverse=True)
+    return matched, missing_sorted, jd_freq
 
+# ---------- ATS checks & heuristics ----------
 def simple_ats_checks(resume_text: str):
     checks = []
     if not resume_text:
         return checks
-    if "\t" in resume_text or "  " in resume_text:
-        checks.append("Possible columns or table-like formatting (avoid for ATS).")
+    # Detect long table-like runs of multiple spaces or tab-separated columns
+    if "\t" in resume_text or re.search(r" {4,}", resume_text):
+        checks.append("Possible columns or table-like formatting — convert to simple vertical layout.")
+    # Images or base64/IMG tags in extracted text
     if "<img" in resume_text.lower() or "image:" in resume_text.lower():
-        checks.append("Images detected or image tags present (remove images for ATS).")
-    if len(resume_text.splitlines()) < 5:
-        checks.append("Very short resume text detected (add more content).")
+        checks.append("Images detected in the resume — remove images or convert content to plain text for ATS.")
+    # Very short resume
+    if len(resume_text.splitlines()) < 6 or len(resume_text.split()) < 150:
+        checks.append("Resume looks very short — aim for 1–2 pages with 4–6 strong bullet points per recent role.")
+    # excessive punctuation or weird characters
+    if re.search(r"[■•♦▸►]", resume_text):
+        checks.append("Unusual bullets detected — use simple hyphens or • and standard characters for safer parsing.")
     return checks
 
-def get_download_link(text, filename="resume.txt"):
+# Detect presence of quantifiable achievements (numbers/percents)
+def detect_quantifications(text: str):
+    nums = re.findall(r"\b\d{1,3}%|\b\d{2,4}\b", text)
+    return len(nums) > 0, nums[:10]
+
+# Actionable suggestions generator
+def generate_actionable_suggestions(score_pct, matched, missing, resume_text, jd_freq):
+    suggestions = []
+    # high-level guidance
+    if score_pct >= 85:
+        suggestions.append("Excellent alignment. Double-check formatting and tailor small role-specific phrases.")
+    elif score_pct >= 65:
+        suggestions.append("Good match — add a few high-priority JD keywords and more quantifiable achievements.")
+    elif score_pct >= 40:
+        suggestions.append("Fair match — prioritize top missing keywords below and quantify your achievements.")
+    else:
+        suggestions.append("Low match — rework your resume to include role-specific skills, responsibilities and keywords from the JD.")
+
+    # missing keyword suggestions (top 6)
+    if missing:
+        top_missing = missing[:8]
+        suggestions.append("Top missing keywords to add (prioritized): " + ", ".join(top_missing))
+
+    # quantify achievements
+    has_q, nums = detect_quantifications(resume_text)
+    if not has_q:
+        suggestions.append("Add quantifiable outcomes (numbers, %, metrics) — e.g., 'Reduced load time by 30%' or 'Handled 20+ tickets/week'.")
+    else:
+        suggestions.append("Good — you already have some numbers: " + ", ".join(nums))
+
+    # formatting / ATS
+    ats = simple_ats_checks(resume_text)
+    if ats:
+        suggestions.append("ATS & formatting fixes: " + " | ".join(ats))
+
+    # LinkedIn suggestion (short)
+    if matched:
+        suggestions.append("For LinkedIn: put top 4 matched keywords in your headline & first two lines of the About section.")
+    return suggestions
+
+# ---------- Download helper ----------
+def get_download_link(text, filename="extracted_resume.txt"):
     b64 = base64.b64encode(text.encode()).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download extracted resume text</a>'
+    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download extracted text</a>'
     return href
 
 # ---------- Session init ----------
 if "page" not in st.session_state:
     st.session_state.page = "home"
-if "user" not in st.session_state:
-    st.session_state.user = None
-if "last_registration" not in st.session_state:
-    st.session_state.last_registration = None
-if "last_login_prefill" not in st.session_state:
-    st.session_state.last_login_prefill = {"email":"","password":""}
-if "scan_history" not in st.session_state:
-    st.session_state.scan_history = []
 if "current_result" not in st.session_state:
     st.session_state.current_result = None
-if "job_tracker" not in st.session_state:
-    st.session_state.job_tracker = []
+if "scan_history" not in st.session_state:
+    st.session_state.scan_history = []
 
 # ---------- Navigation helper ----------
 def navigate_to(page_name: str):
     st.session_state.page = page_name
 
-# ---------- Header / Top-nav (centered, responsive) ----------
+# ---------- Top CSS & header ----------
 st.markdown("""
-    <style>
-    .header-wrap {
-      display:flex;
-      justify-content:center;
-      align-items:center;
-      padding:12px 0;
-      border-bottom:1px solid #eee;
-      background: #ffffff;
-      position: sticky;
-      top: 0;
-      z-index: 9999;
-    }
-    .nav-container {
-      display:flex;
-      gap: 12px;
-      align-items:center;
-      justify-content:center;
-      flex-wrap:wrap;
-      max-width: 1200px;
-      width: 100%;
-      padding: 0 12px;
-    }
-    div.stButton > button {
-      background-color: #800080;
-      color: white !important;
-      padding: 8px 18px;
-      border-radius: 8px;
-      border: none;
-      font-weight: 600;
-      min-width: 110px;
-      font-size: 14px;
-    }
-    div.stButton > button:hover {
-      background-color: #9932CC;
-    }
-    .content-wrap { max-width: 1100px; margin: 28px auto; padding: 0 18px; }
-    .center-text { text-align: center; }
-    .scroll-box { max-height: 220px; overflow-y: auto; padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
-    @media (max-width: 900px) {
-      div.stButton > button { min-width: 96px; padding: 7px 12px; font-size: 13px; }
-      .content-wrap { margin: 18px auto; max-width: 760px; }
-    }
-    @media (max-width: 480px) {
-      div.stButton > button { min-width: 84px; padding: 6px 10px; font-size: 12px; }
-      .content-wrap { margin: 12px auto; max-width: 420px; padding: 0 10px; }
-    }
-    </style>
+<style>
+/* header spacing and button breathing room */
+.header-wrap {
+  display:flex; justify-content:center; align-items:center; padding:14px 0; border-bottom:1px solid #eee; background: #fff; position: sticky; top:0; z-index:9999;
+}
+.nav-container { display:flex; gap: 14px; align-items:center; justify-content:center; flex-wrap:wrap; max-width: 1200px; width: 100%; padding: 0 12px; }
+.nav-item { background:#f7f7fb; padding:8px 14px; border-radius:10px; font-weight:600; color:#333; text-decoration:none; border:1px solid #f0eff5; }
+.nav-item:hover { background:#efe8ff; color:#4b0082; }
+.content-wrap { max-width:1100px; margin:24px auto; padding: 0 18px; }
+.center-text { text-align:center; }
+.scroll-box { max-height:220px; overflow-y:auto; padding:10px; border:1px solid #eee; border-radius:6px; background:#fafafa; }
+.tag { display:inline-block; padding:6px 10px; margin:4px; border-radius:12px; font-size:13px; }
+.tag-match { background:#e8f6ea; color:#1b5e20; }
+.tag-miss { background:#fff0f0; color:#7a1a1a; }
+.card { background:#fff; padding:16px; border-radius:12px; box-shadow: 0 1px 6px rgba(20,20,40,0.04); border:1px solid #f0eef5; }
+.kv { font-weight:600; color:#444; }
+.small { font-size:13px; color:#666; }
+.suggestion { background:#f6f8ff; padding:10px; border-radius:8px; margin-bottom:8px; }
+</style>
 """, unsafe_allow_html=True)
 
-# header with optional logo left (keeps visual balance) and centered nav
+# header layout
 cols = st.columns([1,6,1])
 with cols[0]:
     logo_path = "logo.png"
     if os.path.exists(logo_path):
         st.image(logo_path, width=56)
     else:
-        st.write("")  # placeholder to keep header centered
+        st.write("")
 with cols[1]:
-    nav_items = [
-        ("HOME", "home"),
-        ("Scanner", "scanner"),
-        ("Results", "results"),
-        ("Dashboard", "dashboard"),
-        ("Cover Letter", "cover_letter"),
-        ("LinkedIn", "linkedin"),
-        ("Job Tracker", "job_tracker"),
-        ("Account", "account")
+    st.markdown('<div class="nav-container">', unsafe_allow_html=True)
+    nav = [
+        ("HOME","home"),
+        ("Scanner","scanner"),
+        ("Results","results"),
+        ("Cover Letter","cover_letter"),
+        ("LinkedIn","linkedin"),
+        ("Job Tracker","job_tracker"),
+        ("Account","account")
     ]
-    nav_cols = st.columns([1]*len(nav_items))
-    for i, (label, key) in enumerate(nav_items):
-        with nav_cols[i]:
-            if st.button(label, key=f"nav_{key}"):
-                navigate_to(key)
+    for label, key in nav:
+        st.markdown(f'<a class="nav-item" href="#section-{key}" onclick="window.location.hash=\'section-{key}\'">{label}</a>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 with cols[2]:
-    # right side reserved for future links; keep empty for centering
     st.write("")
 
 # ---------- Smooth scroll helper ----------
@@ -262,41 +296,38 @@ def smooth_scroll_to_current():
 def page_home():
     st.markdown('<div id="section-home"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap center-text">', unsafe_allow_html=True)
-    st.markdown("<h1 style='margin-bottom:6px'>Welcome — How Resume Analyzer Pro helps you</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='max-width:900px; margin: 0 auto; font-size:16px; color:#333'>"
-                "<ul style='text-align:left; display:inline-block; margin:0; padding-left:20px;'>"
-                "<li>Upload your resume (PDF / DOCX / TXT) or paste it — we'll extract and analyze it.</li>"
-                "<li>Paste the Job Description (JD) you want to apply for.</li>"
-                "<li>Get a percentage match, matched & missing keywords, and ATS formatting tips — instantly.</li>"
-                "</ul>"
+    st.markdown("<h1 style='margin-bottom:6px'>Resume Analyzer Pro — Jobscan-like results</h1>", unsafe_allow_html=True)
+    st.markdown("<div style='max-width:900px; margin:0 auto; font-size:16px; color:#333'>"
+                "<p>Upload or paste your resume, paste the job description, and get a professional, actionable match report — keyword coverage, ATS checks, and tailored suggestions for resume, cover letter, and LinkedIn summary.</p>"
                 "</div>", unsafe_allow_html=True)
-    st.markdown("<p style='margin-top:18px'><strong>Try it:</strong> Click <span style='background:#eef7ee; padding:4px 8px; border-radius:6px'>Scanner</span> in the top nav and upload a resume to begin.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='margin-top:18px'><strong>Get started:</strong> Click <span style='background:#eef7ee; padding:6px 10px; border-radius:6px'>Scanner</span> in the top nav and upload a resume to begin.</p>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_scanner():
     st.markdown('<div id="section-scanner"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Resume Scanner")
+    st.header("Resume Scanner — Upload or Paste")
     left, right = st.columns([1,1])
     with left:
-        st.markdown("**Upload Resume (drag & drop or click)**")
+        st.markdown("**Upload Resume (PDF / DOCX / TXT)**")
         uploaded = st.file_uploader("", type=["pdf","docx","doc","txt"], key="upload_resume")
         st.markdown("---")
         st.markdown("**Or paste resume text (optional)**")
-        resume_text_manual = st.text_area("", height=220, key="paste_resume")
+        resume_text_manual = st.text_area("", height=260, key="paste_resume")
         if uploaded:
             st.info(f"Uploaded: {uploaded.name}")
     with right:
         st.markdown("**Paste Job Description (JD)**")
-        jd_text = st.text_area("", height=320, key="paste_jd")
+        jd_text = st.text_area("", height=360, key="paste_jd")
         ck_linkedin = st.checkbox("Also optimize for LinkedIn summary (produce suggestions)", value=False, key="ck_linkedin")
-        weight = st.slider("Importance weight: match vs. readability", 0.0, 1.0, 0.7, key="weight_slider")
-    st.markdown("")  # spacing
+        st.markdown("**Options**")
+        st.write("• Match algorithm: cosine similarity (TF normalized)")
+    st.markdown("")
     if st.button("Scan / Analyze", key="scan_analyze"):
-        # get resume text
-        uploaded_obj = uploaded  # use local variable
+        # prepare texts
+        uploaded_obj = uploaded
         if uploaded_obj:
-            rtext = extract_text_from_uploaded(uploaded_obj)
+            rtext = extract_text_from_uploaded(uploaded_obj) or ""
         else:
             rtext = (st.session_state.get("paste_resume", "") or "").strip()
         jd_val = (st.session_state.get("paste_jd", "") or "").strip()
@@ -307,27 +338,21 @@ def page_scanner():
             st.warning("Please paste a job description to compare.")
             return
 
-        score = compute_match_score(rtext, jd_val)
-        matched, missing = get_keywords_and_missing(rtext, jd_val, top_n=500)
-        warnings = simple_ats_checks(rtext)
-        suggestions = []
-        if score < 40:
-            suggestions.append("Increase keyword density for important JD terms. Add measurable outcomes and technical keywords.")
-        elif score < 70:
-            suggestions.append("You're on the right track. Add more role-specific keywords and quantify achievements.")
-        else:
-            suggestions.append("Great match — ensure formatting is ATS-friendly and proofread for clarity.")
+        # compute cosine similarity (0..1), convert to percentage with smoothing
+        sim = compute_cosine_similarity(rtext, jd_val)
+        score = round(sim * 100, 2)
 
+        matched, missing, jd_freq = get_matched_and_missing(rtext, jd_val, top_n=400)
+        warnings = simple_ats_checks(rtext)
+        suggestions = generate_actionable_suggestions(score, matched, missing, rtext, jd_freq)
         linkedin_suggestions = None
         if ck_linkedin:
-            linkedin_suggestions = [
-                "Start headline with your role + one-line impact.",
-                "Place top 4 technical keywords from JD near top of about summary.",
-                "Add 2 quantifiable achievements and a contact CTA."
-            ]
-            top_kw = matched[:6]
-            if top_kw:
-                linkedin_suggestions.insert(0, "Consider adding keywords: " + ", ".join(top_kw))
+            linkedin_suggestions = []
+            top_matched = matched[:6]
+            if top_matched:
+                linkedin_suggestions.append("Add keywords near the top: " + ", ".join(top_matched[:4]))
+            linkedin_suggestions.append("Start LinkedIn headline with role + one-line impact.")
+            linkedin_suggestions.append("Include 2 quantifiable achievements in About for credibility.")
 
         uploaded_name = uploaded_obj.name if uploaded_obj else "pasted_resume.txt"
         result = {
@@ -338,9 +363,10 @@ def page_scanner():
             "warnings": warnings,
             "suggestions": suggestions,
             "linkedin_suggestions": linkedin_suggestions,
-            "resume_text_excerpt": (rtext[:2000] + "...") if len(rtext) > 2000 else rtext,
-            "jd_excerpt": (jd_val[:1000] + "...") if len(jd_val) > 1000 else jd_val,
-            "resume_name": uploaded_name
+            "resume_text_excerpt": (rtext[:3000] + "...") if len(rtext) > 3000 else rtext,
+            "jd_excerpt": (jd_val[:2000] + "...") if len(jd_val) > 2000 else jd_val,
+            "resume_name": uploaded_name,
+            "jd_freq": jd_freq
         }
         st.session_state.current_result = result
         st.session_state.scan_history.insert(0, result)
@@ -348,66 +374,160 @@ def page_scanner():
         return
     st.markdown("</div>", unsafe_allow_html=True)
 
+# Helper: circular progress block (pure CSS)
+def circular_score_html(score):
+    # clamp
+    sc = max(0, min(100, float(score)))
+    # create CSS style using conic gradient
+    html = f"""
+    <div style="display:flex; justify-content:center; align-items:center;">
+      <div style="width:150px; height:150px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+                  background: conic-gradient(#6b46c1 {sc}%, #eee {sc}%);
+                  box-shadow: 0 6px 18px rgba(50,40,80,0.06);">
+        <div style="width:120px; height:120px; border-radius:50%; background:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+          <div style="font-size:28px; font-weight:700; color:#4b0082;">{sc:.0f}%</div>
+          <div style="font-size:12px; color:#666; margin-top:4px;">Match Score</div>
+        </div>
+      </div>
+    </div>
+    """
+    return html
+
+def render_keyword_chips(words, kind="match", limit=200):
+    if not words:
+        return "<div class='small'>None</div>"
+    chips = []
+    css_class = "tag-match" if kind == "match" else "tag-miss"
+    for w in words[:limit]:
+        chips.append(f"<span class='tag {css_class}'>{w}</span>")
+    return " ".join(chips)
+
 def page_results():
     st.markdown('<div id="section-results"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
     r = st.session_state.get("current_result")
-    st.header("Match Results")
+    st.header("Match Results — Professional Report")
     if not r:
         st.info("No result to display. Run a scan first from the Scanner page.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # card layout: left = score, right = suggestions + details
-    col_score, col_detail = st.columns([1,2])
-    with col_score:
-        st.markdown(f"<div style='background:#f6f0fb; padding:18px; border-radius:12px; text-align:center;'>"
-                    f"<div style='font-size:28px; font-weight:700; color:#4b0082'>{r['score']}%</div>"
-                    f"<div style='color:gray; margin-top:6px;'>Match Score</div>"
-                    f"</div>", unsafe_allow_html=True)
-    with col_detail:
-        st.markdown("<div style='font-weight:600; margin-bottom:6px;'>Quick suggestions</div>", unsafe_allow_html=True)
-        for s in r.get("suggestions", [])[:3]:
-            st.write("• " + s)
+    # top row: circular score + short summary + actions
+    col1, col2 = st.columns([1,2])
+    with col1:
+        st.markdown(circular_score_html(r["score"]), unsafe_allow_html=True)
+        st.markdown("<div class='small center-text' style='margin-top:8px;'>Tip: prioritize the top missing keywords shown to the right.</div>", unsafe_allow_html=True)
+    with col2:
+        # short human-friendly message
+        score_val = r["score"]
+        if score_val >= 85:
+            headline = "Excellent match — you're highly aligned with this JD."
+        elif score_val >= 65:
+            headline = "Strong match — a few keyword & metrics updates can improve it more."
+        elif score_val >= 40:
+            headline = "Partial match — add role-specific skills & measurable outcomes."
+        else:
+            headline = "Low match — rework your resume to closely mirror job requirements."
 
-    st.markdown("### Matched Keywords")
+        st.markdown(f"<div class='card'><div style='font-weight:700; font-size:18px'>{headline}</div>"
+                    f"<div class='small' style='margin-top:8px'>Score: <span class='kv'>{score_val}%</span> • Resume: <span class='kv'>{r.get('resume_name')}</span></div>"
+                    "</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:10px'>", unsafe_allow_html=True)
+        # actionable quick bullets
+        for s in r.get("suggestions", [])[:4]:
+            st.markdown(f"<div class='suggestion'>{s}</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br/>")
+
+    # coverage bar (visual)
     matched = r.get("matched", [])
-    if matched:
-        # display as tag-like items in scroll box for readability
-        tags_html = " ".join([f"<span style='display:inline-block; background:#e8f6ea; color:#1b5e20; padding:6px 10px; margin:4px; border-radius:12px;'>{kw}</span>" for kw in matched])
-        st.markdown(f"<div class='scroll-box'>{tags_html}</div>", unsafe_allow_html=True)
-    else:
-        st.write("None found")
-
-    st.markdown("### Missing Keywords (from JD)")
     missing = r.get("missing", [])
-    if missing:
-        tags_html = " ".join([f"<span style='display:inline-block; background:#fff0f0; color:#7a1a1a; padding:6px 10px; margin:4px; border-radius:12px;'>{kw}</span>" for kw in missing])
-        st.markdown(f"<div class='scroll-box'>{tags_html}</div>", unsafe_allow_html=True)
-    else:
-        st.write("None")
+    coverage = (len(matched) / (len(matched) + len(missing))) if (matched or missing) else 0
+    # progress-like bar
+    pct = int(coverage * 100)
+    st.markdown(f"""
+    <div class='card' style='padding:12px;'>
+      <div style='display:flex; justify-content:space-between; align-items:center;'>
+        <div style='font-weight:700;'>Keyword Coverage</div>
+        <div style='font-size:13px; color:#666;'>{pct}% of JD keywords present</div>
+      </div>
+      <div style='margin-top:10px; background:#f1eef9; height:12px; border-radius:8px; overflow:hidden;'>
+        <div style='width:{pct}%; height:100%; background:linear-gradient(90deg,#6b46c1,#9f7aea);'></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("### ATS Formatting Warnings")
-    if r.get("warnings"):
-        for w in r["warnings"]:
-            st.warning(w)
-    else:
-        st.success("No obvious ATS formatting problems found.")
+    # matched / missing panels
+    col_m, col_mm = st.columns([1,1])
+    with col_m:
+        st.markdown("<div class='card'><div style='font-weight:700; margin-bottom:8px;'>✅ Matched Keywords</div>", unsafe_allow_html=True)
+        st.markdown(render_keyword_chips(matched, kind="match", limit=500), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_mm:
+        st.markdown("<div class='card'><div style='font-weight:700; margin-bottom:8px;'>❌ Missing Keywords (prioritized)</div>", unsafe_allow_html=True)
+        st.markdown(render_keyword_chips(missing, kind="miss", limit=500), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    if r.get("linkedin_suggestions"):
-        st.markdown("### LinkedIn Optimization Suggestions")
-        for s in r["linkedin_suggestions"]:
-            st.write("• " + s)
+    st.markdown("<br/>")
 
-    st.markdown("---")
-    st.markdown("**Resume excerpt (click to expand):**")
+    # ATS warnings / LinkedIn suggestions
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        st.markdown("<div class='card'><div style='font-weight:700; margin-bottom:8px;'>⚠️ ATS & Formatting Checks</div>", unsafe_allow_html=True)
+        if r.get("warnings"):
+            for w in r["warnings"]:
+                st.warning(w)
+        else:
+            st.success("No major ATS formatting issues detected.")
+        st.markdown("<div class='small' style='margin-top:8px'>Common fixes: use standard headings (Experience, Education), avoid images & tables, use simple bullets and plain fonts.</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_b:
+        st.markdown("<div class='card'><div style='font-weight:700; margin-bottom:8px;'>🔗 LinkedIn Optimization</div>", unsafe_allow_html=True)
+        ls = r.get("linkedin_suggestions")
+        if ls:
+            for li in ls:
+                st.markdown(f"- {li}")
+        else:
+            # provide default tips
+            st.markdown("- Start headline with `Role + Impact`.")
+            st.markdown("- Put top 4 JD keywords in the first two lines of About.")
+            st.markdown("- Include 2 quantifiable achievements.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br/>")
+
+    # Resume excerpt with download
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("**Resume excerpt (click to expand)**")
     with st.expander("View resume excerpt"):
-        st.code(r.get("resume_text_excerpt", "")[:5000])
+        st.code(r.get("resume_text_excerpt", "")[:8000])
         st.markdown(get_download_link(r.get("resume_text_excerpt",""), filename="extracted_resume.txt"), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.button("Scan another resume", key="scan_another"):
-        st.session_state.page = "scanner"
-        return
+    # history + actions
+    st.markdown("<br/>")
+    cols_act = st.columns([1,1,1])
+    with cols_act[0]:
+        if st.button("Scan another resume", key="scan_another"):
+            st.session_state.page = "scanner"
+            return
+    with cols_act[1]:
+        if st.button("Save report as text", key="save_report"):
+            # create a simple report text
+            rep = []
+            rep.append(f"Resume Analyzer Report — {datetime.utcnow().isoformat()}")
+            rep.append(f"Score: {r['score']}%")
+            rep.append("Matched: " + ", ".join(r.get("matched", [])[:50]))
+            rep.append("Missing (top): " + ", ".join(r.get("missing", [])[:50]))
+            rep.append("Suggestions:")
+            rep.extend([f"- {s}" for s in r.get("suggestions", [])])
+            st.markdown(get_download_link("\n".join(rep), filename="resume_report.txt"), unsafe_allow_html=True)
+    with cols_act[2]:
+        if st.button("View Scan History", key="view_history"):
+            st.session_state.page = "dashboard"
+            return
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -420,77 +540,108 @@ def page_dashboard():
         st.info("No scans yet. Run a scan on the Scanner page.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    # show as clean table
-    rows = []
-    for item in history:
-        rows.append({
-            "Date": item.get("timestamp",""),
-            "Score": f"{item.get('score')}%",
-            "Resume": item.get("resume_name","")
-        })
-    st.table(rows)
-    # optionally show small matched/missing preview per item
-    for item in history[:10]:
-        st.markdown("---")
-        st.write(f"**{item.get('resume_name','')}** — {item.get('timestamp','')} — **{item.get('score')}%**")
+    # show as clean rows
+    for idx, item in enumerate(history[:20], start=1):
+        st.markdown("<div class='card' style='margin-bottom:10px;'>", unsafe_allow_html=True)
+        st.write(f"**{idx}. {item.get('resume_name','Resume')}** — {item.get('timestamp','')}")
+        st.write(f"Score: **{item.get('score')}%**")
         st.write("Matched: " + (", ".join(item.get("matched", [])[:20]) or "None"))
         st.write("Missing: " + (", ".join(item.get("missing", [])[:20]) or "None"))
+        st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_cover_letter():
     st.markdown('<div id="section-cover_letter"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Cover Letter Analyzer")
-    st.markdown("**Upload cover letter (drag & drop or click)**")
-    cover_file = st.file_uploader("", type=["pdf","docx","doc","txt"], key="cover_upload")
-    st.markdown("---")
-    st.markdown("**Or paste cover letter text**")
-    cover_text = st.text_area("", height=260, key="cover_text")
+    st.header("Cover Letter Analyzer — Tailor for the JD")
+    left, right = st.columns([1,1])
+    with left:
+        st.markdown("**Upload Cover Letter (PDF/DOCX/TXT)**")
+        cover_file = st.file_uploader("", type=["pdf","docx","doc","txt"], key="cover_upload")
+        st.markdown("---")
+        st.markdown("**Or paste cover letter text**")
+        cover_text = st.text_area("", height=260, key="cover_text")
+    with right:
+        st.markdown("**Paste Job Description (for context)**")
+        cover_jd = st.text_area("", height=360, key="cover_jd")
+        st.markdown("**Checks performed:** Keyword coverage, length, opening line & CTA.")
     if st.button("Analyze Cover Letter", key="analyze_cover"):
         if cover_file:
-            ctext = extract_text_from_uploaded(cover_file)
+            ctext = extract_text_from_uploaded(cover_file) or ""
         else:
             ctext = (st.session_state.get("cover_text", "") or "").strip()
         if not ctext:
             st.warning("Please upload or paste a cover letter.")
             return
-        tips = []
-        tips.append("Open with a strong one-line introduction (role + impact).")
-        if len(ctext.split()) < 100:
-            tips.append("Cover letter is short. Aim for ~200-300 words.")
-        st.success("Basic checks completed.")
-        for t in tips:
-            st.write("• " + t)
+        jd_val = (st.session_state.get("cover_jd", "") or "").strip()
+        suggestions = []
+        if len(ctext.split()) < 160:
+            suggestions.append("Cover letter is short — target ~200-350 words for strong context.")
+        # opening line
+        first_line = ctext.splitlines()[0] if ctext.splitlines() else ""
+        if len(first_line.split()) < 6:
+            suggestions.append("Start with a strong one-line opener that mentions the role and impact.")
+        # keyword overlap with JD (if provided)
+        matched, missing, jd_freq = ([], [], {})
+        if jd_val:
+            matched, missing, jd_freq = get_matched_and_missing(ctext, jd_val, top_n=200)
+            suggestions.append(f"Keywords present from JD: {', '.join(matched[:8]) or 'None'}")
+            if missing:
+                suggestions.append("Consider mentioning: " + ", ".join(missing[:8]))
+        # quantification
+        has_q, nums = detect_quantifications(ctext)
+        if not has_q:
+            suggestions.append("Add 1–2 quantified achievements (numbers or %).")
+        else:
+            suggestions.append("Contains quantified items: " + ", ".join(nums[:5]))
+        # show results
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("**Cover Letter Suggestions**")
+        for s in suggestions:
+            st.markdown(f"- {s}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_linkedin():
     st.markdown('<div id="section-linkedin"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("LinkedIn Optimizer")
-    st.info("Paste your LinkedIn 'About' summary and an optional JD for contextual suggestions.")
-    summary = st.text_area("Paste LinkedIn Summary", height=260, key="linkedin_summary")
+    st.header("LinkedIn Optimizer — About & Headline")
+    summary = st.text_area("Paste LinkedIn 'About' summary", height=260, key="linkedin_summary")
     jd = st.text_area("Paste Job Description (optional)", height=200, key="linkedin_jd")
     if st.button("Optimize LinkedIn", key="opt_linkedin"):
         if not summary.strip():
-            st.warning("Please paste your LinkedIn summary.")
+            st.warning("Please paste your LinkedIn About text.")
             return
         suggestions = []
-        suggestions.append("Start with role + impact in the first sentence.")
-        suggestions.append("Add top 4 technical keywords from JD near the top.")
+        # headline suggestion
+        suggestions.append("Start with `YourRole — What you do + One-line impact`.")
+        # JD keyword overlap
         if jd.strip():
-            matched, missing = get_keywords_and_missing(summary, jd, top_n=20)
-            suggestions.append(f"Keywords present: {', '.join(matched[:8])}" if matched else "No JD keywords found in summary.")
+            matched, missing, jd_freq = get_matched_and_missing(summary, jd, top_n=200)
+            if matched:
+                suggestions.append("Keywords found from JD: " + ", ".join(matched[:6]))
             if missing:
-                suggestions.append(f"Consider adding: {', '.join(missing[:8])}")
-        suggestions.append("Add a CTA for contact and 2 quantifiable achievements.")
+                suggestions.append("Consider adding: " + ", ".join(missing[:6]))
+        # quantification
+        has_q, nums = detect_quantifications(summary)
+        if not has_q:
+            suggestions.append("Add 1–2 quantified achievements in the first 3 lines.")
+        else:
+            suggestions.append("Quantified achievements detected: " + ", ".join(nums[:6]))
+        # CTA
+        suggestions.append("Add a one-line CTA like 'Open to new roles — contact: email@example.com' (if comfortable).")
+
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
         for s in suggestions:
-            st.write("• " + s)
+            st.markdown(f"- {s}")
+        st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_tracker():
     st.markdown('<div id="section-job_tracker"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Job Tracker")
+    st.header("Job Tracker (session-only)")
     title = st.text_input("Job title", key="tracker_title")
     company = st.text_input("Company", key="tracker_company")
     date = st.date_input("Application date", key="tracker_date")
@@ -502,6 +653,8 @@ def page_tracker():
             "date": date.isoformat(),
             "status": status
         }
+        if "job_tracker" not in st.session_state:
+            st.session_state.job_tracker = []
         st.session_state.job_tracker.insert(0, entry)
         st.success("Added to tracker.")
     if st.session_state.get("job_tracker"):
@@ -512,33 +665,35 @@ def page_tracker():
 def page_account():
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Account — simplified auth")
-    if st.session_state.user:
+    st.header("Account — session-based (no DB)")
+    st.info("Registration & login are simulated and stored in session only (no database).")
+    if "user" in st.session_state and st.session_state.get("user"):
         st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
-        if st.button("Logout", key="logout_btn"):
+        if st.button("Logout"):
             st.session_state.user = None
             st.session_state.page = "home"
             return
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    # Registration
-    st.subheader("Sign Up")
+    st.subheader("Sign Up (session-only)")
     su_name = st.text_input("Full name", key="su_name")
     su_email = st.text_input("Email", key="su_email")
     su_pwd = st.text_input("Password", type="password", key="su_pwd")
-    if st.button("Register", key="register_btn"):
-        hashed = bcrypt.hash(su_pwd or "temp123")
-        st.session_state.last_registration = {"name": su_name, "email": su_email, "hashed": hashed}
-        st.session_state.last_login_prefill = {"email": su_email or "", "password": su_pwd or ""}
-        st.success("Registration successful. Please log in (we prefilled your login).")
+    if st.button("Register"):
+        if bcrypt:
+            h = bcrypt.hash(su_pwd or "temp123")
+        else:
+            h = "hashed-session-placeholder"
+        st.session_state.last_registration = {"name": su_name, "email": su_email, "hashed": h}
+        st.success("Registration saved to session. Please Login below.")
     st.markdown("---")
     st.subheader("Login")
-    li_email = st.text_input("Email", key="li_email", value=st.session_state.last_login_prefill.get("email",""))
-    li_pwd = st.text_input("Password", type="password", key="li_pwd", value=st.session_state.last_login_prefill.get("password",""))
-    if st.button("Login", key="login_btn"):
-        user = {"id": 1, "name": st.session_state.last_registration.get("name","Guest") if st.session_state.last_registration else "Guest", "email": li_email}
+    li_email = st.text_input("Email", key="li_email")
+    li_pwd = st.text_input("Password", type="password", key="li_pwd")
+    if st.button("Login"):
+        user = {"id": 1, "name": st.session_state.get("last_registration", {}).get("name","Guest"), "email": li_email}
         st.session_state.user = user
-        st.success("Logged in successfully.")
+        st.success("Signed in (session-only).")
         st.session_state.page = "dashboard"
         return
     st.markdown("</div>", unsafe_allow_html=True)
