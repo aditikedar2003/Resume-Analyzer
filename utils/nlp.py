@@ -1,7 +1,8 @@
+### FILE: utils/nlp.py
+# utils/nlp.py
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
 
 def clean_text(s: str):
     if not s:
@@ -9,7 +10,6 @@ def clean_text(s: str):
     s = s.lower()
     s = re.sub(r'\s+', ' ', s).strip()
     return s
-
 
 def compute_match_score(resume_text: str, jd_text: str):
     resume_text = clean_text(resume_text)
@@ -24,14 +24,12 @@ def compute_match_score(resume_text: str, jd_text: str):
     except Exception:
         return 0.0
 
-
 def get_keywords(resume_text: str, jd_text: str, top_n=50):
-    r_words = set(re.findall(r"\b[a-z0-9\+\#\-\.]+\b", resume_text.lower()))
-    jd_words = set(re.findall(r"\b[a-z0-9\+\#\-\.]+\b", jd_text.lower()))
+    r_words = set(re.findall(r'\b[a-z0-9\+\#\-\.]+\b', resume_text.lower()))
+    jd_words = set(re.findall(r'\b[a-z0-9\+\#\-\.]+\b', jd_text.lower()))
     matched = sorted(list(jd_words & r_words))
     missing = sorted(list(jd_words - r_words))
     return matched[:top_n], missing[:top_n]
-
 
 def simple_ats_checks(resume_text: str):
     checks = []
@@ -44,3 +42,15 @@ def simple_ats_checks(resume_text: str):
     if len(resume_text.splitlines()) < 5:
         checks.append("Short resume text detected (check content).")
     return checks
+
+# higher-level helper used in app
+def analyze_resume_and_jd(resume_text: str, jd_text: str):
+    score = compute_match_score(resume_text, jd_text)
+    matched, missing = get_keywords(resume_text, jd_text, top_n=200)
+    warnings = simple_ats_checks(resume_text)
+    return {
+        "score": score,
+        "matched": matched,
+        "missing": missing,
+        "warnings": warnings
+    }
