@@ -1,107 +1,147 @@
 import streamlit as st
-from PIL import Image
+from pathlib import Path
+import psycopg2
 import os
 
-# ===============================
-# PAGE CONFIGURATION
-# ===============================
+# =========================
+#  DATABASE CONNECTION
+# =========================
+def get_db_connection():
+    return psycopg2.connect(
+        host="dpg-d1p4gdjuibrs73dc70ig-a.oregon-postgres.render.com",
+        dbname="resume_analyzer_xv7a",
+        user="resume_user",
+        password="Ujx0Y38UiFyhlJwobetKPBIgvc2FhyYz",
+        port=5432
+    )
+
+# =========================
+#  PAGE CONFIG
+# =========================
 st.set_page_config(
     page_title="Resume Analyzer",
-    page_icon="assets/logo.png",
-    layout="wide",
+    page_icon="📄",
+    layout="wide"
 )
 
-# ===============================
-# CUSTOM CSS
-# ===============================
+# =========================
+#  CUSTOM CSS
+# =========================
 st.markdown("""
     <style>
-    /* Main theme color - purple */
-    :root {
-        --main-color: #800080;
-    }
-    /* Header logo container */
-    .header-container {
-        display: flex;
-        align-items: center;
-        justify-content: flex-start;
-        padding: 8px 20px;
-        background-color: white;
-        border-bottom: 2px solid var(--main-color);
-    }
-    .header-logo {
-        height: 45px;
-        margin-right: 15px;
-    }
-    .header-title {
-        font-size: 26px;
-        font-weight: bold;
-        color: var(--main-color);
-        white-space: nowrap;
-    }
-    /* Buttons */
+    /* Purple theme for buttons */
     div.stButton > button {
-        background-color: var(--main-color);
+        background-color: #800080;
         color: white;
-        border-radius: 6px;
-        border: none;
-        padding: 0.4rem 1rem;
+        border-radius: 8px;
+        padding: 0.4em 1.2em;
         font-size: 16px;
+        font-weight: 500;
+        border: none;
         cursor: pointer;
     }
     div.stButton > button:hover {
-        background-color: #9932CC; /* lighter purple on hover */
+        background-color: #9932CC;
+        color: white;
     }
-    /* Hide default Streamlit menu */
-    #MainMenu, header, footer {visibility: hidden;}
+    /* Header alignment */
+    .header-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .nav-buttons {
+        display: flex;
+        gap: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# ===============================
-# HEADER SECTION
-# ===============================
-with st.container():
-    logo_path = os.path.join("assets", "logo.png")
-    if os.path.exists(logo_path):
-        logo = Image.open(logo_path)
-        col1, col2 = st.columns([0.08, 1])  # Slightly wider col1 for better word fit
-        with col1:
-            st.image(logo, use_container_width=True)
-        with col2:
-            st.markdown("<div class='header-title'>Resume Analyzer</div>", unsafe_allow_html=True)
-    else:
-        st.warning("Logo not found. Please check assets/logo.png.")
+# =========================
+#  NAVIGATION STATE
+# =========================
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "Home"
 
-# ===============================
-# SIDEBAR NAVIGATION
-# ===============================
-st.sidebar.title("📂 Navigation")
-page = st.sidebar.radio("Go to", ["🏠 Home", "📄 Resume Scanner", "✉️ Cover Letter Scanner", "💼 LinkedIn Optimizer", "📊 Job Tracker"])
+def navigate_to(page_name):
+    st.session_state.current_page = page_name
 
-# ===============================
-# PAGE CONTENT
-# ===============================
-if page == "🏠 Home":
-    st.header("Welcome to Resume Analyzer")
-    st.write("Easily check your resume against job descriptions, optimize for ATS, and get keyword suggestions.")
-elif page == "📄 Resume Scanner":
-    st.header("Resume Scanner")
-    st.write("Upload your resume and job description to get match rate and improvement tips.")
-elif page == "✉️ Cover Letter Scanner":
-    st.header("Cover Letter Scanner")
-    st.write("Upload your cover letter for analysis.")
-elif page == "💼 LinkedIn Optimizer":
-    st.header("LinkedIn Optimizer")
-    st.write("Analyze your LinkedIn profile for better reach.")
-elif page == "📊 Job Tracker":
-    st.header("Job Tracker")
-    st.write("Track your job applications easily.")
+# =========================
+#  HEADER WITH LOGO + NAV
+# =========================
+logo_path = Path("assets/logo.png")
+if logo_path.exists():
+    logo_img = f"<img src='data:image/png;base64,{logo_path.read_bytes().hex()}'/>"
 
-# ===============================
-# FOOTER
-# ===============================
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown(
-    "<center style='color: gray;'>© 2025 Resume Analyzer. All rights reserved.</center>",
-    unsafe_allow_html=True
-)
+col1, col2 = st.columns([1, 3])
+with col1:
+    st.image(str(logo_path), width=150)
+with col2:
+    nav_col1, nav_col2 = st.columns([5, 1])
+    with nav_col1:
+        nav1, nav2, nav3, nav4, nav5, nav6, nav7 = st.columns([1.2, 1.8, 2, 2, 1.6, 1.4, 1.6])
+        with nav1:
+            if st.button("Home"):
+                navigate_to("Home")
+        with nav2:
+            if st.button("Resume Scanner"):
+                navigate_to("Resume Scanner")
+        with nav3:
+            if st.button("Cover Letter"):
+                navigate_to("Cover Letter")
+        with nav4:
+            if st.button("LinkedIn Optimizer"):
+                navigate_to("LinkedIn Optimizer")
+        with nav5:
+            if st.button("Job Tracker"):
+                navigate_to("Job Tracker")
+        with nav6:
+            if st.button("Pricing"):
+                navigate_to("Pricing")
+        with nav7:
+            if st.button("Resources"):
+                navigate_to("Resources")
+    with nav_col2:
+        if st.button("Sign Up / Login"):
+            navigate_to("Auth")
+
+st.markdown("---")
+
+# =========================
+#  PAGE CONTENT
+# =========================
+if st.session_state.current_page == "Home":
+    st.title("Welcome to Resume Analyzer")
+    st.write("Your AI-powered ATS Resume Optimization Tool.")
+
+elif st.session_state.current_page == "Resume Scanner":
+    st.title("Resume Scanner")
+    st.write("Upload your resume and job description to check match rate.")
+    # Your resume scanner code here
+
+elif st.session_state.current_page == "Cover Letter":
+    st.title("Cover Letter Scanner")
+    st.write("Upload and analyze your cover letter.")
+    # Your cover letter scanner code here
+
+elif st.session_state.current_page == "LinkedIn Optimizer":
+    st.title("LinkedIn Optimizer")
+    st.write("Optimize your LinkedIn profile with AI suggestions.")
+    # Your LinkedIn optimizer code here
+
+elif st.session_state.current_page == "Job Tracker":
+    st.title("Job Tracker")
+    st.write("Track your job applications here.")
+    # Your job tracker code here
+
+elif st.session_state.current_page == "Pricing":
+    st.title("Pricing Plans")
+    st.write("Choose the plan that fits your needs.")
+
+elif st.session_state.current_page == "Resources":
+    st.title("Resources")
+    st.write("Resume tips, cover letter guides, and more.")
+
+elif st.session_state.current_page == "Auth":
+    st.title("Sign Up / Login")
+    st.write("Authentication page content here.")
