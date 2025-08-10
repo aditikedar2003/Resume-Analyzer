@@ -1,7 +1,9 @@
 streamlit
 psycopg2-binary
 python-dotenv
-PyPDF2
-openai
 pandas
+numpy
+PyPDF2
 spacy
+openai
+python-docx
