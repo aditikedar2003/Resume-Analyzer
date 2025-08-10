@@ -1,9 +1,11 @@
-streamlit
-psycopg2-binary
+# File: requirements.txt
+streamlit>=1.18.0
 python-dotenv
+sqlalchemy
+psycopg2-binary
+passlib[bcrypt]
+python-docx
+PyPDF2
+scikit-learn
 pandas
 numpy
-PyPDF2
-spacy
-openai
-python-docx
