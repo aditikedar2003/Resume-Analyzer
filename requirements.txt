@@ -4,3 +4,4 @@ numpy
 PyPDF2
 python-docx
 passlib[bcrypt]
+psycopg2-binary
