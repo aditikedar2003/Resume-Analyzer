@@ -1,11 +1,6 @@
-### FILE: requirements.txt
-streamlit>=1.20
+streamlit
 python-dotenv
-sqlalchemy
-psycopg2-binary
-passlib[bcrypt]
-python-docx
+numpy
 PyPDF2
-scikit-learn
-pandas
-tqdm
+python-docx
+passlib[bcrypt]
