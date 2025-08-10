@@ -29,10 +29,10 @@ except Exception:
 import numpy as np
 from passlib.hash import bcrypt
 
-# page config
+# Page config
 st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="wide")
 
-# ---------- Utilities (unchanged from your original) ----------
+# ---------- Utilities (unchanged core logic) ----------
 def safe_extract_text_from_pdf(fbytes: bytes):
     if not PyPDF2:
         return ""
@@ -83,7 +83,7 @@ def extract_text_from_uploaded(uploaded_file):
         except Exception:
             return ""
 
-# text cleaning & tokenization
+# tokenization & scoring
 TOKEN_RE = re.compile(r"\b[a-z0-9\+\#\-\.]+\b", re.I)
 def tokenize(s: str):
     if not s:
@@ -96,7 +96,6 @@ def build_term_vector(tokens, vocab_index):
     for t in tokens:
         if t in vocab_index:
             vec[vocab_index[t]] += 1.0
-    # length-normalize to avoid length bias
     if np.linalg.norm(vec) > 0:
         return vec / np.linalg.norm(vec)
     return vec
@@ -140,7 +139,7 @@ def get_download_link(text, filename="resume.txt"):
     href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download extracted resume text</a>'
     return href
 
-# ---------- Session state init ----------
+# ---------- Session init ----------
 if "page" not in st.session_state:
     st.session_state.page = "home"
 if "user" not in st.session_state:
@@ -150,104 +149,96 @@ if "last_registration" not in st.session_state:
 if "last_login_prefill" not in st.session_state:
     st.session_state.last_login_prefill = {"email":"","password":""}
 if "scan_history" not in st.session_state:
-    st.session_state.scan_history = []  # list of dicts
+    st.session_state.scan_history = []
 if "current_result" not in st.session_state:
     st.session_state.current_result = None
+if "job_tracker" not in st.session_state:
+    st.session_state.job_tracker = []
 
 # ---------- Navigation helper ----------
 def navigate_to(page_name: str):
-    """Set session page (no experimental_rerun)."""
     st.session_state.page = page_name
 
-# ---------- Header / Top-nav (center-aligned, responsive) ----------
+# ---------- Header / Top-nav (centered, responsive) ----------
 st.markdown("""
     <style>
-    /* header */
     .header-wrap {
       display:flex;
       justify-content:center;
       align-items:center;
-      padding:14px 0;
+      padding:12px 0;
       border-bottom:1px solid #eee;
-      background: white;
+      background: #ffffff;
       position: sticky;
       top: 0;
       z-index: 9999;
     }
-    /* nav buttons container */
-    .nav-buttons {
+    .nav-container {
       display:flex;
-      gap: 14px;
+      gap: 12px;
       align-items:center;
       justify-content:center;
       flex-wrap:wrap;
-      max-width: 1100px;
+      max-width: 1200px;
       width: 100%;
+      padding: 0 12px;
     }
-    /* apply to Streamlit button */
     div.stButton > button {
       background-color: #800080;
       color: white !important;
-      padding: 9px 18px;
-      border-radius: 10px;
+      padding: 8px 18px;
+      border-radius: 8px;
       border: none;
       font-weight: 600;
-      min-width: 120px;
+      min-width: 110px;
       font-size: 14px;
     }
     div.stButton > button:hover {
       background-color: #9932CC;
     }
-    /* wide page container */
-    .content-wrap {
-      max-width: 1100px;
-      margin: 30px auto;
-      padding: 0 20px;
-    }
-    /* center headings/content on HOME and results */
+    .content-wrap { max-width: 1100px; margin: 28px auto; padding: 0 18px; }
     .center-text { text-align: center; }
-    /* scrollable keyword boxes */
-    .scroll-box {
-      max-height: 220px;
-      overflow-y: auto;
-      padding: 10px;
-      border: 1px solid #eee;
-      border-radius: 6px;
-      background: #fafafa;
-    }
+    .scroll-box { max-height: 220px; overflow-y: auto; padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
     @media (max-width: 900px) {
-      div.stButton > button { min-width: 100px; padding: 8px 14px; font-size:13px; }
+      div.stButton > button { min-width: 96px; padding: 7px 12px; font-size: 13px; }
       .content-wrap { margin: 18px auto; max-width: 760px; }
     }
     @media (max-width: 480px) {
-      div.stButton > button { min-width: 84px; padding: 7px 10px; font-size:12px; }
+      div.stButton > button { min-width: 84px; padding: 6px 10px; font-size: 12px; }
       .content-wrap { margin: 12px auto; max-width: 420px; padding: 0 10px; }
     }
     </style>
 """, unsafe_allow_html=True)
 
-# build header
-st.markdown('<div class="header-wrap"><div class="nav-buttons">', unsafe_allow_html=True)
-# produce buttons using Streamlit so they are interactive
-nav_map = [
-    ("HOME", "home"),
-    ("Scanner", "scanner"),
-    ("Results", "results"),
-    ("Dashboard", "dashboard"),
-    ("Cover Letter", "cover_letter"),
-    ("LinkedIn", "linkedin"),
-    ("Job Tracker", "job_tracker"),
-    ("Account", "account")
-]
-# create a row of buttons
-btn_cols = st.columns([1]*len(nav_map))
-for i, (label, key) in enumerate(nav_map):
-    with btn_cols[i]:
-        if st.button(label, key=f"nav_{key}"):
-            navigate_to(key)
-st.markdown('</div></div>', unsafe_allow_html=True)
+# header with optional logo left (keeps visual balance) and centered nav
+cols = st.columns([1,6,1])
+with cols[0]:
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=56)
+    else:
+        st.write("")  # placeholder to keep header centered
+with cols[1]:
+    nav_items = [
+        ("HOME", "home"),
+        ("Scanner", "scanner"),
+        ("Results", "results"),
+        ("Dashboard", "dashboard"),
+        ("Cover Letter", "cover_letter"),
+        ("LinkedIn", "linkedin"),
+        ("Job Tracker", "job_tracker"),
+        ("Account", "account")
+    ]
+    nav_cols = st.columns([1]*len(nav_items))
+    for i, (label, key) in enumerate(nav_items):
+        with nav_cols[i]:
+            if st.button(label, key=f"nav_{key}"):
+                navigate_to(key)
+with cols[2]:
+    # right side reserved for future links; keep empty for centering
+    st.write("")
 
-# ---------- Smooth scroll anchor helper ----------
+# ---------- Smooth scroll helper ----------
 def smooth_scroll_to_current():
     page_id = st.session_state.get("page", "home")
     safe_page = str(page_id).replace('"', '')
@@ -260,19 +251,18 @@ def smooth_scroll_to_current():
             if (el) {{
                 el.scrollIntoView({{behavior: "smooth", block: "start"}});
             }}
-        }}, 100);
+        }}, 120);
     }})();
     </script>
     """
     st.markdown(scroll_js, unsafe_allow_html=True)
 
-# ---------- Page implementations (preserve your original logic; replaced experimental_rerun) ----------
-# Each page begins with an anchor div id="section-<page_key>" and all content wrapped in .content-wrap
+# ---------- Pages ----------
 
 def page_home():
     st.markdown('<div id="section-home"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap center-text">', unsafe_allow_html=True)
-    st.markdown("<h1 style='margin-bottom:8px'>Welcome — How Resume Analyzer Pro helps you</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='margin-bottom:6px'>Welcome — How Resume Analyzer Pro helps you</h1>", unsafe_allow_html=True)
     st.markdown("<div style='max-width:900px; margin: 0 auto; font-size:16px; color:#333'>"
                 "<ul style='text-align:left; display:inline-block; margin:0; padding-left:20px;'>"
                 "<li>Upload your resume (PDF / DOCX / TXT) or paste it — we'll extract and analyze it.</li>"
@@ -303,8 +293,8 @@ def page_scanner():
         weight = st.slider("Importance weight: match vs. readability", 0.0, 1.0, 0.7, key="weight_slider")
     st.markdown("")  # spacing
     if st.button("Scan / Analyze", key="scan_analyze"):
-        # Obtain resume text
-        uploaded_obj = st.session_state.get("upload_resume")
+        # get resume text
+        uploaded_obj = uploaded  # use local variable
         if uploaded_obj:
             rtext = extract_text_from_uploaded(uploaded_obj)
         else:
@@ -317,11 +307,9 @@ def page_scanner():
             st.warning("Please paste a job description to compare.")
             return
 
-        # Compute
         score = compute_match_score(rtext, jd_val)
         matched, missing = get_keywords_and_missing(rtext, jd_val, top_n=500)
         warnings = simple_ats_checks(rtext)
-        # suggestions
         suggestions = []
         if score < 40:
             suggestions.append("Increase keyword density for important JD terms. Add measurable outcomes and technical keywords.")
@@ -329,7 +317,7 @@ def page_scanner():
             suggestions.append("You're on the right track. Add more role-specific keywords and quantify achievements.")
         else:
             suggestions.append("Great match — ensure formatting is ATS-friendly and proofread for clarity.")
-        # linkedin suggestions
+
         linkedin_suggestions = None
         if ck_linkedin:
             linkedin_suggestions = [
@@ -337,13 +325,11 @@ def page_scanner():
                 "Place top 4 technical keywords from JD near top of about summary.",
                 "Add 2 quantifiable achievements and a contact CTA."
             ]
-            # Make a short tailored LinkedIn suggestion that includes some matched keywords
             top_kw = matched[:6]
             if top_kw:
                 linkedin_suggestions.insert(0, "Consider adding keywords: " + ", ".join(top_kw))
 
-        # store result
-        uploaded_name = uploaded_obj.name if uploaded_obj else ("pasted_resume.txt")
+        uploaded_name = uploaded_obj.name if uploaded_obj else "pasted_resume.txt"
         result = {
             "timestamp": datetime.utcnow().isoformat(),
             "score": score,
@@ -372,31 +358,32 @@ def page_results():
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # Score and top row
-    col1, col2 = st.columns([1,2])
-    with col1:
-        st.metric("Match Score", f"{r['score']}%")
-    with col2:
-        # quick actionable line
-        st.markdown("<div style='font-weight:600'>Quick suggestions</div>", unsafe_allow_html=True)
+    # card layout: left = score, right = suggestions + details
+    col_score, col_detail = st.columns([1,2])
+    with col_score:
+        st.markdown(f"<div style='background:#f6f0fb; padding:18px; border-radius:12px; text-align:center;'>"
+                    f"<div style='font-size:28px; font-weight:700; color:#4b0082'>{r['score']}%</div>"
+                    f"<div style='color:gray; margin-top:6px;'>Match Score</div>"
+                    f"</div>", unsafe_allow_html=True)
+    with col_detail:
+        st.markdown("<div style='font-weight:600; margin-bottom:6px;'>Quick suggestions</div>", unsafe_allow_html=True)
         for s in r.get("suggestions", [])[:3]:
             st.write("• " + s)
 
     st.markdown("### Matched Keywords")
     matched = r.get("matched", [])
     if matched:
-        st.markdown('<div class="scroll-box">', unsafe_allow_html=True)
-        st.write(", ".join(matched))
-        st.markdown('</div>', unsafe_allow_html=True)
+        # display as tag-like items in scroll box for readability
+        tags_html = " ".join([f"<span style='display:inline-block; background:#e8f6ea; color:#1b5e20; padding:6px 10px; margin:4px; border-radius:12px;'>{kw}</span>" for kw in matched])
+        st.markdown(f"<div class='scroll-box'>{tags_html}</div>", unsafe_allow_html=True)
     else:
         st.write("None found")
 
     st.markdown("### Missing Keywords (from JD)")
     missing = r.get("missing", [])
     if missing:
-        st.markdown('<div class="scroll-box">', unsafe_allow_html=True)
-        st.write(", ".join(missing))
-        st.markdown('</div>', unsafe_allow_html=True)
+        tags_html = " ".join([f"<span style='display:inline-block; background:#fff0f0; color:#7a1a1a; padding:6px 10px; margin:4px; border-radius:12px;'>{kw}</span>" for kw in missing])
+        st.markdown(f"<div class='scroll-box'>{tags_html}</div>", unsafe_allow_html=True)
     else:
         st.write("None")
 
@@ -407,16 +394,16 @@ def page_results():
     else:
         st.success("No obvious ATS formatting problems found.")
 
-    # LinkedIn suggestions block (if available)
     if r.get("linkedin_suggestions"):
         st.markdown("### LinkedIn Optimization Suggestions")
         for s in r["linkedin_suggestions"]:
             st.write("• " + s)
 
     st.markdown("---")
-    st.markdown("**Resume excerpt:**")
-    st.code(r.get("resume_text_excerpt", "")[:5000])
-    st.markdown(get_download_link(r.get("resume_text_excerpt",""), filename="extracted_resume.txt"), unsafe_allow_html=True)
+    st.markdown("**Resume excerpt (click to expand):**")
+    with st.expander("View resume excerpt"):
+        st.code(r.get("resume_text_excerpt", "")[:5000])
+        st.markdown(get_download_link(r.get("resume_text_excerpt",""), filename="extracted_resume.txt"), unsafe_allow_html=True)
 
     if st.button("Scan another resume", key="scan_another"):
         st.session_state.page = "scanner"
@@ -427,18 +414,27 @@ def page_results():
 def page_dashboard():
     st.markdown('<div id="section-dashboard"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Dashboard — Recent Scans (session only)")
+    st.header("Dashboard — Recent Scans")
     history = st.session_state.get("scan_history", [])
     if not history:
         st.info("No scans yet. Run a scan on the Scanner page.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    for item in history[:50]:
+    # show as clean table
+    rows = []
+    for item in history:
+        rows.append({
+            "Date": item.get("timestamp",""),
+            "Score": f"{item.get('score')}%",
+            "Resume": item.get("resume_name","")
+        })
+    st.table(rows)
+    # optionally show small matched/missing preview per item
+    for item in history[:10]:
         st.markdown("---")
-        ts = item.get("timestamp", "")
-        st.write(f"**Date:** {ts}  |  **Score:** {item.get('score')}%  |  **Resume:** {item.get('resume_name')}")
-        st.write("Matched: " + (", ".join(item.get("matched", [])[:30]) or "None"))
-        st.write("Missing: " + (", ".join(item.get("missing", [])[:30]) or "None"))
+        st.write(f"**{item.get('resume_name','')}** — {item.get('timestamp','')} — **{item.get('score')}%**")
+        st.write("Matched: " + (", ".join(item.get("matched", [])[:20]) or "None"))
+        st.write("Missing: " + (", ".join(item.get("missing", [])[:20]) or "None"))
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_cover_letter():
@@ -450,9 +446,7 @@ def page_cover_letter():
     st.markdown("---")
     st.markdown("**Or paste cover letter text**")
     cover_text = st.text_area("", height=260, key="cover_text")
-    st.markdown("")
     if st.button("Analyze Cover Letter", key="analyze_cover"):
-        # extract text
         if cover_file:
             ctext = extract_text_from_uploaded(cover_file)
         else:
@@ -496,8 +490,7 @@ def page_linkedin():
 def page_tracker():
     st.markdown('<div id="section-job_tracker"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Job Tracker (session-only)")
-    st.info("Log job applications (stored only for this session).")
+    st.header("Job Tracker")
     title = st.text_input("Job title", key="tracker_title")
     company = st.text_input("Company", key="tracker_company")
     date = st.date_input("Application date", key="tracker_date")
@@ -509,8 +502,6 @@ def page_tracker():
             "date": date.isoformat(),
             "status": status
         }
-        if "job_tracker" not in st.session_state:
-            st.session_state.job_tracker = []
         st.session_state.job_tracker.insert(0, entry)
         st.success("Added to tracker.")
     if st.session_state.get("job_tracker"):
@@ -521,7 +512,7 @@ def page_tracker():
 def page_account():
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Account (session-only) — simplified auth")
+    st.header("Account — simplified auth")
     if st.session_state.user:
         st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
         if st.button("Logout", key="logout_btn"):
@@ -552,7 +543,7 @@ def page_account():
         return
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Router (single-page) ----------
+# ---------- Router ----------
 page = st.session_state.page
 
 if page == "home":
