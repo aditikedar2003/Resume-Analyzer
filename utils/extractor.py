@@ -1,4 +1,9 @@
-# utils/extractor.py
+# File: utils/extractor.py
+"""
+utils/extractor.py
+File text extraction helpers for txt, pdf, docx.
+Requires python-docx and PyPDF2.
+"""
 from io import BytesIO
 import docx
 import PyPDF2
@@ -30,6 +35,10 @@ def extract_text_from_pdf(fbytes: bytes):
         return ""
 
 def extract_file_text(uploaded_file):
+    """
+    uploaded_file: streamlit uploaded file-like object
+    returns: extracted text or empty string
+    """
     if uploaded_file is None:
         return ""
     name = uploaded_file.name.lower()
@@ -43,4 +52,5 @@ def extract_file_text(uploaded_file):
             return extract_text_from_docx(raw)
         except Exception:
             return extract_text_from_txt(raw)
+    # fallback
     return extract_text_from_txt(raw)
