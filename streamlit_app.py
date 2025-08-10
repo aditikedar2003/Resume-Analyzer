@@ -1,4 +1,8 @@
-# streamlit_app.py
+# File: streamlit_app.py
+"""
+Main Streamlit app. Single-file UI + routing.
+Header navigation (no left sidebar). Auth expander in header.
+"""
 import streamlit as st
 from utils.extractor import extract_file_text
 from utils.nlp import compute_match_score, get_keywords, simple_ats_checks
@@ -6,152 +10,147 @@ import utils.auth as auth
 from utils.db import detect_db
 from sqlalchemy import text
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
 st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="wide")
 
-# detect DB
+# DB detection (engine or sqlite conn)
 db_type, db_conn = detect_db()
 
-# session init
+# Session defaults
 if "page" not in st.session_state:
     st.session_state.page = "home"
 if "user" not in st.session_state:
     st.session_state.user = None
-if "just_registered" not in st.session_state:
-    st.session_state.just_registered = None
 if "show_auth" not in st.session_state:
     st.session_state.show_auth = False
 if "match_result" not in st.session_state:
     st.session_state.match_result = None
 
-# HEADER: logo / title / nav
-logo_col, title_col, nav_col = st.columns([1, 4, 3])
-with logo_col:
-    st.image("https://via.placeholder.com/64", width=64)
-with title_col:
+# Header
+col_logo, col_title, col_actions = st.columns([1,6,2])
+with col_logo:
+    st.image("https://via.placeholder.com/72", width=72)
+with col_title:
     st.markdown("<h1 style='margin:0'>Resume Analyzer Pro</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='color:gray;margin-top:4px'>Optimize your resume for any job — ATS checks & keyword match.</div>", unsafe_allow_html=True)
-with nav_col:
-    c1, c2, c3, c4 = st.columns(4)
-    if c1.button("Home"):
-        st.session_state.page = "home"
-        st.rerun()
-    if c2.button("Scanner"):
-        st.session_state.page = "scanner"
-        st.rerun()
-    if c3.button("Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    if c4.button("Resources"):
-        st.session_state.page = "resources"
-        st.rerun()
-
-# RIGHT SIDE AUTH controls in header area
-auth_col1, auth_col2 = st.columns([4,1])
-with auth_col2:
+    st.markdown("<div style='color:gray'>Optimize your resume for any job — ATS checks & keyword match.</div>", unsafe_allow_html=True)
+with col_actions:
     if st.session_state.user:
+        st.write(f"Signed in: **{st.session_state.user['name']}**")
         if st.button("Logout"):
             st.session_state.user = None
-            st.success("Logged out")
-            st.rerun()
+            st.experimental_rerun()
     else:
         if st.button("Login / Sign Up"):
             st.session_state.show_auth = True
 
-# AUTH expander when requested
+# Auth expander below header
 if st.session_state.show_auth:
     with st.expander("Account"):
-        tabs = st.tabs(["Login","Sign Up"])
+        tabs = st.tabs(["Login", "Sign Up"])
         with tabs[0]:
-            login_email = st.text_input("Email", key="login_email", value=(st.session_state.get("just_registered") or {}).get("email", ""))
-            login_pwd = st.text_input("Password", type="password", key="login_pwd", value=(st.session_state.get("just_registered") or {}).get("password", ""))
+            le = st.text_input("Email", key="login_email")
+            lp = st.text_input("Password", type="password", key="login_pwd")
             if st.button("Sign in"):
-                ok, resp = auth.login_user(login_email, login_pwd)
+                ok, resp = auth.login_user(le, lp)
                 if ok:
                     st.session_state.user = resp
                     st.session_state.show_auth = False
                     st.success("Logged in")
-                    st.rerun()
+                    st.experimental_rerun()
                 else:
                     st.error(resp)
         with tabs[1]:
-            su_name = st.text_input("Full name", key="su_name")
-            su_email = st.text_input("Email", key="su_email")
-            su_pwd = st.text_input("Password", type="password", key="su_pwd")
+            sn = st.text_input("Full name", key="su_name")
+            se = st.text_input("Email", key="su_email")
+            sp = st.text_input("Password", type="password", key="su_pwd")
             if st.button("Register"):
-                ok, msg = auth.register_user(su_name, su_email, su_pwd)
+                ok, msg = auth.register_user(sn, se, sp)
                 if ok:
-                    st.session_state.just_registered = {"email": su_email, "password": su_pwd}
-                    st.success("Registered successfully — signing you in...")
-                    ok2, user = auth.login_user(su_email, su_pwd)
+                    st.success("Registered successfully — logging you in...")
+                    ok2, user = auth.login_user(se, sp)
                     if ok2:
                         st.session_state.user = user
                         st.session_state.show_auth = False
-                        st.rerun()
+                        st.experimental_rerun()
                     else:
-                        st.info("Please sign in from Login tab.")
+                        st.info("Please login now.")
                 else:
                     st.error(msg)
 
-# PAGES
+# Navigation bar (header style)
+nav_cols = st.columns(5)
+if nav_cols[0].button("Home"):
+    st.session_state.page = "home"
+    st.experimental_rerun()
+if nav_cols[1].button("Scanner"):
+    st.session_state.page = "scanner"
+    st.experimental_rerun()
+if nav_cols[2].button("Dashboard"):
+    st.session_state.page = "dashboard"
+    st.experimental_rerun()
+if nav_cols[3].button("Cover Letter"):
+    st.session_state.page = "cover"
+    st.experimental_rerun()
+if nav_cols[4].button("LinkedIn"):
+    st.session_state.page = "linkedin"
+    st.experimental_rerun()
+
+# Pages
 def page_home():
     st.header("Optimize your resume for any job")
     st.markdown("""
-    - Upload resume (PDF/DOCX/TXT)
-    - Paste Job Description (JD)
-    - Click **Scan** to get match score, missing keywords and ATS tips.
+    - Upload resume (PDF/DOCX/TXT) or paste text.
+    - Paste the Job Description (JD).
+    - Click **Scan** to get match score, missing keywords, and ATS tips.
     """)
-    if st.button("Try Jobscan Now"):
+    if st.button("Try Scanner"):
         st.session_state.page = "scanner"
-        st.rerun()
+        st.experimental_rerun()
 
 def page_scanner():
     st.header("Resume Scanner")
-    col1, col2 = st.columns([1,1])
-    with col1:
+    c1, c2 = st.columns([1,1])
+    with c1:
         uploaded = st.file_uploader("Upload Resume (pdf/docx/txt)", type=["pdf","docx","txt"])
-        resume_text_manual = st.text_area("Or paste resume text (optional)", height=250)
-    with col2:
+        manual = st.text_area("Or paste resume text (optional)", height=240)
+    with c2:
         jd_text = st.text_area("Paste Job Description (JD) here", height=400)
         if st.button("Scan"):
-            if uploaded:
-                rtext = extract_file_text(uploaded)
-            else:
-                rtext = (resume_text_manual or "").strip()
-            if not rtext:
+            resume_text = extract_file_text(uploaded) if uploaded else (manual or "").strip()
+            if not resume_text:
                 st.warning("Please provide resume text (upload or paste).")
                 return
             if not jd_text.strip():
                 st.warning("Please paste a job description to compare.")
                 return
-            score = compute_match_score(rtext, jd_text)
-            matched, missing = get_keywords(rtext, jd_text, top_n=200)
-            warnings = simple_ats_checks(rtext)
-            # Save to DB (best effort)
-            resume_id = None
-            job_id = None
+            score = compute_match_score(resume_text, jd_text)
+            matched, missing = get_keywords(resume_text, jd_text, top_n=200)
+            warnings = simple_ats_checks(resume_text)
+
+            # Persist (non-fatal)
             try:
                 if db_type == "postgres":
                     engine = db_conn
                     with engine.begin() as conn:
-                        res = conn.execute(text("INSERT INTO resumes (user_id, filename, content) VALUES (:uid, :fn, :content) RETURNING id"),
-                                           {"uid": st.session_state.user["id"] if st.session_state.user else None, "fn": (uploaded.name if uploaded else "pasted"), "content": rtext})
-                        resume_id = int(res.fetchone()[0])
-                        res2 = conn.execute(text("INSERT INTO job_descriptions (user_id, filename, content) VALUES (:uid, :fn, :content) RETURNING id"),
-                                            {"uid": st.session_state.user["id"] if st.session_state.user else None, "fn": "jd.txt", "content": jd_text})
-                        job_id = int(res2.fetchone()[0])
+                        r = conn.execute(text("INSERT INTO resumes (user_id, filename, content) VALUES (:uid, :fn, :content) RETURNING id"),
+                                         {"uid": st.session_state.user["id"] if st.session_state.user else None, "fn": (uploaded.name if uploaded else "pasted"), "content": resume_text})
+                        resume_id = int(r.fetchone()[0])
+                        r2 = conn.execute(text("INSERT INTO job_descriptions (user_id, filename, content) VALUES (:uid, :fn, :content) RETURNING id"),
+                                          {"uid": st.session_state.user["id"] if st.session_state.user else None, "fn": "jd.txt", "content": jd_text})
+                        job_id = int(r2.fetchone()[0])
                         conn.execute(text("INSERT INTO scan_results (user_id, resume_id, job_id, match_score, missing_keywords, matched_keywords) VALUES (:uid, :rid, :jid, :score, :missing, :matched)"),
                                      {"uid": st.session_state.user["id"] if st.session_state.user else None, "rid": resume_id, "jid": job_id, "score": score, "missing": ", ".join(missing[:200]), "matched": ", ".join(matched[:200])})
                 else:
                     conn = db_conn
                     cur = conn.cursor()
-                    cur.execute("""CREATE TABLE IF NOT EXISTS resumes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, filename TEXT, content TEXT, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
-                    cur.execute("""CREATE TABLE IF NOT EXISTS job_descriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, filename TEXT, content TEXT, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
-                    cur.execute("""CREATE TABLE IF NOT EXISTS scan_results (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, resume_id INTEGER, job_id INTEGER, match_score REAL, missing_keywords TEXT, matched_keywords TEXT, scanned_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+                    cur.execute("CREATE TABLE IF NOT EXISTS resumes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, filename TEXT, content TEXT, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+                    cur.execute("CREATE TABLE IF NOT EXISTS job_descriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, filename TEXT, content TEXT, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+                    cur.execute("CREATE TABLE IF NOT EXISTS scan_results (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, resume_id INTEGER, job_id INTEGER, match_score REAL, missing_keywords TEXT, matched_keywords TEXT, scanned_at TEXT DEFAULT CURRENT_TIMESTAMP)")
                     conn.commit()
-                    cur.execute("INSERT INTO resumes (user_id, filename, content) VALUES (?, ?, ?)", (st.session_state.user["id"] if st.session_state.user else None, (uploaded.name if uploaded else "pasted"), rtext))
+                    cur.execute("INSERT INTO resumes (user_id, filename, content) VALUES (?, ?, ?)", (st.session_state.user["id"] if st.session_state.user else None, (uploaded.name if uploaded else "pasted"), resume_text))
                     resume_id = cur.lastrowid
                     cur.execute("INSERT INTO job_descriptions (user_id, filename, content) VALUES (?, ?, ?)", (st.session_state.user["id"] if st.session_state.user else None, "jd.txt", jd_text))
                     job_id = cur.lastrowid
@@ -159,32 +158,33 @@ def page_scanner():
                     conn.commit()
             except Exception as e:
                 st.warning("DB save failed (non-fatal): " + str(e))
+
             st.session_state.match_result = {"score": score, "matched": matched, "missing": missing, "warnings": warnings}
             st.session_state.page = "results"
-            st.rerun()
+            st.experimental_rerun()
 
 def page_results():
     st.header("Match Results")
     r = st.session_state.get("match_result")
     if not r:
-        st.info("No results yet. Run a scan first.")
+        st.info("Nothing to show. Run a scan.")
         return
     st.metric("Match Score", f"{r['score']}%")
     st.subheader("Matched Keywords")
     st.write(", ".join(r.get("matched", [])[:200]) or "None")
     st.subheader("Missing Keywords (from JD)")
     st.write(", ".join(r.get("missing", [])[:200]) or "None")
-    st.subheader("ATS Warnings")
+    st.subheader("ATS Formatting Warnings")
     for w in r.get("warnings", []):
         st.warning(w)
     if st.button("Scan another resume"):
         st.session_state.page = "scanner"
-        st.rerun()
+        st.experimental_rerun()
 
 def page_dashboard():
-    st.header("Dashboard")
+    st.header("Dashboard - recent scans")
     if not st.session_state.user:
-        st.info("Sign in to see your saved scans.")
+        st.info("Please sign in to view your scans.")
         return
     try:
         if db_type == "postgres":
@@ -212,12 +212,29 @@ def page_dashboard():
     except Exception as e:
         st.error("Could not load dashboard: " + str(e))
 
-def page_resources():
-    st.header("Resources")
-    st.markdown("- [Resume tips - Jobscan](https://www.jobscan.co/blog/how-to-write-a-resume/)")
-    st.markdown("- Templates & articles coming soon.")
+def page_cover():
+    st.header("Cover Letter Analyzer")
+    st.info("Paste your cover letter and JD; get simple suggestions.")
+    cover = st.text_area("Paste Cover Letter", height=240)
+    jd = st.text_area("Paste Job Description (optional)", height=160)
+    if st.button("Analyze Cover Letter"):
+        if not cover.strip():
+            st.warning("Paste your cover letter.")
+        else:
+            st.success("Basic checks completed.")
+            st.write("Tip: Start with a strong opening line; mention 2-3 quantifiable achievements; tailor to the JD.")
 
-# Routing
+def page_linkedin():
+    st.header("LinkedIn Optimizer")
+    st.info("Paste your LinkedIn 'About' summary for quick optimizations.")
+    summary = st.text_area("Paste LinkedIn Summary", height=300)
+    if st.button("Optimize"):
+        if not summary.strip():
+            st.warning("Paste your LinkedIn summary.")
+        else:
+            st.write("Suggestions: Add keywords from JD; open with role+impact; highlight 2 achievements; include contact CTA.")
+
+# Router
 if st.session_state.page == "home":
     page_home()
 elif st.session_state.page == "scanner":
@@ -226,7 +243,9 @@ elif st.session_state.page == "results":
     page_results()
 elif st.session_state.page == "dashboard":
     page_dashboard()
-elif st.session_state.page == "resources":
-    page_resources()
+elif st.session_state.page == "cover":
+    page_cover()
+elif st.session_state.page == "linkedin":
+    page_linkedin()
 else:
     page_home()
