@@ -11,7 +11,7 @@ def navigate_to(page_name):
 col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2,1,1,1,1,1,1,1,1])
 
 with col1:
-    st.image("logo (2).png", width=50)
+    st.image("assets/logo.png", width=50)  # ✅ Correct path
     st.markdown("**Resume Analyzer Pro**")
 
 with col2:
@@ -54,50 +54,45 @@ page = st.session_state.page
 
 def page_home():
     st.title("Welcome to Resume Analyzer Pro")
-    # Your existing home page content here
-    # Removed the "This version runs without a database" info message as requested
+    st.write("Optimize your resume with AI-powered ATS scoring and suggestions.")
 
 def page_scanner():
     st.title("Resume Scanner")
-    # Your existing scanner page code here
-    # On some event (e.g. after scan completed), replace st.experimental_rerun() with:
-    # navigate_to("Results")
-    # Example placeholder:
+    uploaded_file = st.file_uploader("Upload your resume", type=["pdf", "docx"])
+    if uploaded_file is not None:
+        st.success("Resume uploaded successfully.")
     if st.button("Scan Resume"):
         # your scanning logic here
-        navigate_to("Results")
+        navigate_to("Results")  # ✅ No experimental_rerun
 
 def page_results():
     st.title("Results")
-    # Your existing results page content here
+    st.write("Your resume match rate and keyword suggestions will appear here.")
 
 def page_dashboard():
     st.title("Dashboard")
-    # Your existing dashboard content here
+    st.write("View your saved resumes, scans, and analytics.")
 
 def page_cover_letter():
     st.title("Cover Letter")
-    # Your existing cover letter page content here
+    st.write("Upload or generate a tailored cover letter.")
 
 def page_linkedin():
     st.title("LinkedIn Optimizer")
-    # Your existing LinkedIn page content here
+    st.write("Optimize your LinkedIn profile for recruiters.")
 
 def page_job_tracker():
     st.title("Job Tracker")
-    # Your existing job tracker page content here
+    st.write("Track and manage your job applications.")
 
 def page_account():
     st.title("Account")
-    # Your existing account page content here
-    # On some event (e.g. after update), replace st.experimental_rerun() with:
-    # navigate_to("Home")
-    # Example placeholder:
+    st.write("Manage your account details here.")
     if st.button("Update Account"):
-        # your update logic here
-        navigate_to("Home")
+        # update logic here
+        navigate_to("Home")  # ✅ No experimental_rerun
 
-# Route to the right page function
+# ====== ROUTER ======
 if page == "Home":
     page_home()
 elif page == "Scanner":
@@ -116,4 +111,3 @@ elif page == "Account":
     page_account()
 else:
     st.error("Page not found.")
-
