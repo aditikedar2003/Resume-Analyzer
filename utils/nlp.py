@@ -1,4 +1,9 @@
-# utils/nlp.py
+# File: utils/nlp.py
+"""
+utils/nlp.py
+Simple TF-IDF match score + keyword helpers and ATS checks.
+Requires scikit-learn.
+"""
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
