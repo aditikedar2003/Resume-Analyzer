@@ -7,6 +7,28 @@ if "page" not in st.session_state:
 def navigate_to(page_name):
     st.session_state.page = page_name
 
+# ====== BUTTON STYLE ======
+st.markdown(
+    """
+    <style>
+    div.stButton > button {
+        background-color: #007BFF; /* Blue */
+        color: white !important;
+        border-radius: 8px;
+        padding: 8px 20px;
+        font-weight: 600;
+        border: none;
+        width: 100%;
+    }
+    div.stButton > button:hover {
+        background-color: #0056b3;
+        color: white !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ====== HEADER WITH BUTTON NAVIGATION ======
 col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2,1,1,1,1,1,1,1,1])
 
@@ -15,28 +37,28 @@ with col1:
     st.markdown("**Resume Analyzer Pro**")
 
 with col2:
-    if st.button("Home"):
+    if st.button("Home", key="home"):
         navigate_to("Home")
 with col3:
-    if st.button("Scanner"):
+    if st.button("Scanner", key="scanner"):
         navigate_to("Scanner")
 with col4:
-    if st.button("Results"):
+    if st.button("Results", key="results"):
         navigate_to("Results")
 with col5:
-    if st.button("Dashboard"):
+    if st.button("Dashboard", key="dashboard"):
         navigate_to("Dashboard")
 with col6:
-    if st.button("Cover Letter"):
+    if st.button("Cover Letter", key="coverletter"):
         navigate_to("Cover Letter")
 with col7:
-    if st.button("LinkedIn"):
+    if st.button("LinkedIn", key="linkedin"):
         navigate_to("LinkedIn")
 with col8:
-    if st.button("Job Tracker"):
+    if st.button("Job Tracker", key="jobtracker"):
         navigate_to("Job Tracker")
 with col9:
-    if st.button("Account"):
+    if st.button("Account", key="account"):
         navigate_to("Account")
 
 # ====== SIGN UP / LOGIN LINK TOP RIGHT ======
@@ -61,7 +83,7 @@ def page_scanner():
     uploaded_file = st.file_uploader("Upload your resume", type=["pdf", "docx"])
     if uploaded_file is not None:
         st.success("Resume uploaded successfully.")
-    if st.button("Scan Resume"):
+    if st.button("Scan Resume", key="scanresume"):
         # your scanning logic here
         navigate_to("Results")  # ✅ No experimental_rerun
 
@@ -88,7 +110,7 @@ def page_job_tracker():
 def page_account():
     st.title("Account")
     st.write("Manage your account details here.")
-    if st.button("Update Account"):
+    if st.button("Update Account", key="updateaccount"):
         # update logic here
         navigate_to("Home")  # ✅ No experimental_rerun
 
