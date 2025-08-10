@@ -1,135 +1,107 @@
 import streamlit as st
+from PIL import Image
+import os
 
-# ====== NAVIGATION STATE AND FUNCTION ======
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
+# ===============================
+# PAGE CONFIGURATION
+# ===============================
+st.set_page_config(
+    page_title="Resume Analyzer",
+    page_icon="assets/logo.png",
+    layout="wide",
+)
 
-def navigate_to(page_name):
-    st.session_state.page = page_name
-
-# ====== BUTTON STYLE ======
-st.markdown(
-    """
+# ===============================
+# CUSTOM CSS
+# ===============================
+st.markdown("""
     <style>
-    div.stButton > button {
-        background-color: #007BFF; /* Blue */
-        color: white !important;
-        border-radius: 8px;
+    /* Main theme color - purple */
+    :root {
+        --main-color: #800080;
+    }
+    /* Header logo container */
+    .header-container {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
         padding: 8px 20px;
-        font-weight: 600;
+        background-color: white;
+        border-bottom: 2px solid var(--main-color);
+    }
+    .header-logo {
+        height: 45px;
+        margin-right: 15px;
+    }
+    .header-title {
+        font-size: 26px;
+        font-weight: bold;
+        color: var(--main-color);
+        white-space: nowrap;
+    }
+    /* Buttons */
+    div.stButton > button {
+        background-color: var(--main-color);
+        color: white;
+        border-radius: 6px;
         border: none;
-        width: 100%;
+        padding: 0.4rem 1rem;
+        font-size: 16px;
+        cursor: pointer;
     }
     div.stButton > button:hover {
-        background-color: #0056b3;
-        color: white !important;
+        background-color: #9932CC; /* lighter purple on hover */
     }
+    /* Hide default Streamlit menu */
+    #MainMenu, header, footer {visibility: hidden;}
     </style>
-    """,
-    unsafe_allow_html=True
-)
+""", unsafe_allow_html=True)
 
-# ====== HEADER WITH BUTTON NAVIGATION ======
-col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2,1,1,1,1,1,1,1,1])
+# ===============================
+# HEADER SECTION
+# ===============================
+with st.container():
+    logo_path = os.path.join("assets", "logo.png")
+    if os.path.exists(logo_path):
+        logo = Image.open(logo_path)
+        col1, col2 = st.columns([0.08, 1])  # Slightly wider col1 for better word fit
+        with col1:
+            st.image(logo, use_container_width=True)
+        with col2:
+            st.markdown("<div class='header-title'>Resume Analyzer</div>", unsafe_allow_html=True)
+    else:
+        st.warning("Logo not found. Please check assets/logo.png.")
 
-with col1:
-    st.image("assets/logo.png", width=50)  # ✅ Correct path
-    st.markdown("**Resume Analyzer Pro**")
+# ===============================
+# SIDEBAR NAVIGATION
+# ===============================
+st.sidebar.title("📂 Navigation")
+page = st.sidebar.radio("Go to", ["🏠 Home", "📄 Resume Scanner", "✉️ Cover Letter Scanner", "💼 LinkedIn Optimizer", "📊 Job Tracker"])
 
-with col2:
-    if st.button("Home", key="home"):
-        navigate_to("Home")
-with col3:
-    if st.button("Scanner", key="scanner"):
-        navigate_to("Scanner")
-with col4:
-    if st.button("Results", key="results"):
-        navigate_to("Results")
-with col5:
-    if st.button("Dashboard", key="dashboard"):
-        navigate_to("Dashboard")
-with col6:
-    if st.button("Cover Letter", key="coverletter"):
-        navigate_to("Cover Letter")
-with col7:
-    if st.button("LinkedIn", key="linkedin"):
-        navigate_to("LinkedIn")
-with col8:
-    if st.button("Job Tracker", key="jobtracker"):
-        navigate_to("Job Tracker")
-with col9:
-    if st.button("Account", key="account"):
-        navigate_to("Account")
+# ===============================
+# PAGE CONTENT
+# ===============================
+if page == "🏠 Home":
+    st.header("Welcome to Resume Analyzer")
+    st.write("Easily check your resume against job descriptions, optimize for ATS, and get keyword suggestions.")
+elif page == "📄 Resume Scanner":
+    st.header("Resume Scanner")
+    st.write("Upload your resume and job description to get match rate and improvement tips.")
+elif page == "✉️ Cover Letter Scanner":
+    st.header("Cover Letter Scanner")
+    st.write("Upload your cover letter for analysis.")
+elif page == "💼 LinkedIn Optimizer":
+    st.header("LinkedIn Optimizer")
+    st.write("Analyze your LinkedIn profile for better reach.")
+elif page == "📊 Job Tracker":
+    st.header("Job Tracker")
+    st.write("Track your job applications easily.")
 
-# ====== SIGN UP / LOGIN LINK TOP RIGHT ======
+# ===============================
+# FOOTER
+# ===============================
+st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
-    """
-    <div style='position:absolute; top:10px; right:20px;'>
-        <a href='#' style='text-decoration:none; font-weight:bold; color:#4CAF50;'>Sign Up / Login</a>
-    </div>
-    """,
+    "<center style='color: gray;'>© 2025 Resume Analyzer. All rights reserved.</center>",
     unsafe_allow_html=True
 )
-
-# ====== PAGE CONTENT ROUTING ======
-page = st.session_state.page
-
-def page_home():
-    st.title("Welcome to Resume Analyzer Pro")
-    st.write("Optimize your resume with AI-powered ATS scoring and suggestions.")
-
-def page_scanner():
-    st.title("Resume Scanner")
-    uploaded_file = st.file_uploader("Upload your resume", type=["pdf", "docx"])
-    if uploaded_file is not None:
-        st.success("Resume uploaded successfully.")
-    if st.button("Scan Resume", key="scanresume"):
-        # your scanning logic here
-        navigate_to("Results")  # ✅ No experimental_rerun
-
-def page_results():
-    st.title("Results")
-    st.write("Your resume match rate and keyword suggestions will appear here.")
-
-def page_dashboard():
-    st.title("Dashboard")
-    st.write("View your saved resumes, scans, and analytics.")
-
-def page_cover_letter():
-    st.title("Cover Letter")
-    st.write("Upload or generate a tailored cover letter.")
-
-def page_linkedin():
-    st.title("LinkedIn Optimizer")
-    st.write("Optimize your LinkedIn profile for recruiters.")
-
-def page_job_tracker():
-    st.title("Job Tracker")
-    st.write("Track and manage your job applications.")
-
-def page_account():
-    st.title("Account")
-    st.write("Manage your account details here.")
-    if st.button("Update Account", key="updateaccount"):
-        # update logic here
-        navigate_to("Home")  # ✅ No experimental_rerun
-
-# ====== ROUTER ======
-if page == "Home":
-    page_home()
-elif page == "Scanner":
-    page_scanner()
-elif page == "Results":
-    page_results()
-elif page == "Dashboard":
-    page_dashboard()
-elif page == "Cover Letter":
-    page_cover_letter()
-elif page == "LinkedIn":
-    page_linkedin()
-elif page == "Job Tracker":
-    page_job_tracker()
-elif page == "Account":
-    page_account()
-else:
-    st.error("Page not found.")
