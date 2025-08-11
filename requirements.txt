@@ -7,3 +7,5 @@ PyPDF2
 requests
 sqlalchemy
 psycopg2-binary
+scikit-learn
+numpy
