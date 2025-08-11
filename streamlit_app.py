@@ -1,11 +1,12 @@
 # streamlit_app.py
 """
 Final single-file Resume Analyzer (session-only mode).
-- Keeps your original UI layout & nav (minimal UI changes).
-- Improved backend logic: TF-IDF cosine similarity (sklearn if available, fallback to simple cosine),
-  keyword extraction, lightweight stemming-like normalization, prioritized missing keywords,
-  actionable suggestions, improved Cover Letter & LinkedIn checks.
-- No DB. Session-only.
+- Single-page app with centered header navigation.
+- No st.experimental_rerun() used.
+- Resume/JD analysis (TF-IDF cosine similarity when available / fallback cosine),
+  keyword suggestions, ATS checks.
+- PDF/DOCX extraction when libraries available.
+- Dashboard (session-only), Cover Letter upload/paste, LinkedIn, Job Tracker, Account (session-only).
 """
 
 import streamlit as st
@@ -17,15 +18,7 @@ import base64
 import math
 from collections import Counter
 
-# optional libs - prefer sklearn if available for TF-IDF; otherwise fallback
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    SKLEARN_AVAILABLE = True
-except Exception:
-    SKLEARN_AVAILABLE = False
-
-# optional file readers
+# Optional libs
 try:
     import PyPDF2
 except Exception:
@@ -36,18 +29,48 @@ try:
 except Exception:
     docx = None
 
-# Keep bcrypt import optional (you used passlib.hash)
 try:
     from passlib.hash import bcrypt
 except Exception:
     bcrypt = None
+
+# Prefer sklearn TF-IDF if available
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    SKLEARN_AVAILABLE = True
+except Exception:
+    SKLEARN_AVAILABLE = False
 
 import numpy as np
 
 # Page config
 st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="wide")
 
-# ---------- Utilities: file extraction ----------
+# -------------------------
+# Initialize session_state keys to avoid attribute errors
+# -------------------------
+defaults = {
+    "page": "home",
+    "user": None,
+    "last_registration": None,
+    "last_login_prefill": {"email": "", "password": ""},
+    "scan_history": [],
+    "current_result": None,
+    "job_tracker": [],
+    "paste_resume": "",
+    "paste_cover_letter": "",
+    "paste_jd": "",
+    "paste_linkedin": "",
+    "paste_cover_jd": ""
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# -------------------------
+# Utilities: file extraction
+# -------------------------
 def safe_extract_text_from_pdf(fbytes: bytes):
     if not PyPDF2:
         return ""
@@ -80,7 +103,6 @@ def extract_text_from_uploaded(uploaded_file):
         return ""
     name = uploaded_file.name.lower()
     raw = uploaded_file.read()
-    # try recognized types
     if name.endswith(".pdf"):
         text = safe_extract_text_from_pdf(raw)
         if text:
@@ -98,51 +120,54 @@ def extract_text_from_uploaded(uploaded_file):
         except Exception:
             return ""
 
-# ---------- Text normalization & lightweight stemming ----------
+# -------------------------
+# Text normalization & tokenization (light stemming)
+# -------------------------
 TOKEN_RE = re.compile(r"\b[a-z0-9\+\#\-\.]+\b", re.I)
 
 def normalize_word(w: str):
-    """Lowercase and apply light stemming heuristics (remove common suffixes)."""
     w = w.lower()
-    # strip punctuation (already tokenized usually)
     w = re.sub(r'[^a-z0-9\+\#\-\.]', '', w)
-    # light stemming heuristics (not a full stemmer, but helps match variants)
+    # Light heuristic stemming (remove common suffixes)
     for suf in ('ings','ing','ed','es','s','ment'):
         if w.endswith(suf) and len(w) - len(suf) >= 3:
             return w[: -len(suf)]
     return w
 
-def tokenize(s: str):
-    if not s:
+def tokenize(text: str):
+    if not text:
         return []
-    tokens = TOKEN_RE.findall(s.lower())
+    tokens = TOKEN_RE.findall(text.lower())
     return [normalize_word(t) for t in tokens if t.strip()]
 
-# ---------- TF-IDF & similarity (sklearn if available, else fallback) ----------
+# -------------------------
+# Scoring: TF-IDF (sklearn) or fallback
+# -------------------------
 def compute_match_score(resume_text: str, jd_text: str):
     r = (resume_text or "").strip()
     j = (jd_text or "").strip()
     if not r or not j:
         return 0.0
+    # Prefer sklearn TF-IDF if available
     if SKLEARN_AVAILABLE:
         try:
-            # Use scikit-learn TF-IDF + cosine similarity
             vec = TfidfVectorizer(token_pattern=r"(?u)\b\w+\b", lowercase=True)
             mats = vec.fit_transform([r, j])
             sim = cosine_similarity(mats[0:1], mats[1:2])[0][0]
             return round(float(sim) * 100, 2)
         except Exception:
             pass
-    # Fallback: normalized bag-of-words cosine
+    # fallback: normalized term vectors cosine
     r_tokens = tokenize(r)
     j_tokens = tokenize(j)
     vocab = sorted(set(r_tokens + j_tokens))
+    if not vocab:
+        return 0.0
     vocab_index = {w: i for i, w in enumerate(vocab)}
     def build_vec(tokens):
         vec = np.zeros(len(vocab_index), dtype=float)
         for t in tokens:
-            if t in vocab_index:
-                vec[vocab_index[t]] += 1.0
+            vec[vocab_index[t]] += 1.0
         if np.linalg.norm(vec) > 0:
             return vec / np.linalg.norm(vec)
         return vec
@@ -154,91 +179,89 @@ def compute_match_score(resume_text: str, jd_text: str):
     sim = float(np.dot(rvec, jvec))
     return round(sim * 100, 2)
 
-# ---------- Keywords extraction & prioritization ----------
+# -------------------------
+# Keyword extraction & missing detection
+# -------------------------
 def extract_top_terms(text: str, top_n=60, min_len=3):
     tokens = tokenize(text)
     tokens = [t for t in tokens if len(t) >= min_len]
     counts = Counter(tokens)
     most = counts.most_common(top_n)
-    return [w for w,c in most], {w:c for w,c in most}
+    return [w for w, c in most], {w: c for w, c in most}
 
 def get_keywords_and_missing(resume_text: str, jd_text: str, top_n=50):
-    jd_terms_list, jd_freq = extract_top_terms(jd_text, top_n)
+    jd_list, jd_freq = extract_top_terms(jd_text, top_n)
     r_tokens = set(tokenize(resume_text))
-    matched = [t for t in jd_terms_list if t in r_tokens]
-    missing = [t for t in jd_terms_list if t not in r_tokens]
-    # sort missing by jd frequency (already in that order), ensure uniqueness
-    return matched[:top_n], missing[:top_n]
+    matched = [t for t in jd_list if t in r_tokens]
+    missing = [t for t in jd_list if t not in r_tokens]
+    return matched[:top_n], missing[:top_n], jd_freq
 
-# ---------- ATS checks & heuristics ----------
+# -------------------------
+# ATS checks and helper heuristics
+# -------------------------
 def simple_ats_checks(resume_text: str):
     checks = []
     if not resume_text:
         return checks
     if "\t" in resume_text or re.search(r" {4,}", resume_text):
-        checks.append("Possible columns or table-like formatting — convert to simple vertical layout.")
+        checks.append("Possible columns or table-like formatting — convert to a simple vertical layout.")
     if "<img" in resume_text.lower() or "image:" in resume_text.lower():
         checks.append("Images detected — remove images for ATS-friendly resume.")
     if len(resume_text.splitlines()) < 6 or len(resume_text.split()) < 140:
-        checks.append("Resume looks short — aim for 1–2 pages with 4–6 bullets per recent role.")
+        checks.append("Resume looks short — aim for 1–2 pages with clear bullets for each role.")
     if re.search(r"[■♦▸►]", resume_text):
-        checks.append("Unusual bullet characters detected — use standard hyphens or simple bullets.")
+        checks.append("Unusual bullet characters detected — use simple hyphens or standard bullets.")
     return checks
 
 def detect_quantifications(text: str):
     nums = re.findall(r"\b\d{1,3}%|\b\d{2,4}\b", text)
     return len(nums) > 0, nums[:10]
 
-# ---------- Suggestions generator ----------
-def generate_actionable_suggestions(score_pct, matched, missing, resume_text, jd_freq=None):
+def generate_actionable_suggestions(score_pct, matched, missing, resume_text):
     suggestions = []
     if score_pct >= 85:
         suggestions.append("Excellent alignment. Minor wording & formatting polish recommended.")
     elif score_pct >= 65:
-        suggestions.append("Good match — add some high-priority JD keywords and metrics to boost further.")
+        suggestions.append("Good match — add a few high-priority JD keywords and quantify achievements.")
     elif score_pct >= 40:
-        suggestions.append("Partial match — prioritize top missing keywords and quantify achievements.")
+        suggestions.append("Partial match — prioritize top missing keywords and add measurable outcomes.")
     else:
-        suggestions.append("Low match — update resume to include role-specific skills, responsibilities and keywords from the JD.")
-
+        suggestions.append("Low match — rework your resume to include role-specific skills and keywords.")
     if missing:
         suggestions.append("Top missing keywords to add: " + ", ".join(missing[:8]))
-
     has_q, nums = detect_quantifications(resume_text)
     if not has_q:
         suggestions.append("Add quantifiable outcomes (numbers, %, metrics) to your bullets.")
     else:
         suggestions.append("Quantified items detected: " + ", ".join(nums))
-
     ats = simple_ats_checks(resume_text)
     if ats:
         suggestions.append("ATS & formatting fixes: " + " | ".join(ats))
-
     if matched:
-        suggestions.append("For LinkedIn: place top 4 matched keywords in your headline and the first two lines of About.")
+        suggestions.append("For LinkedIn: place top 4 matched keywords in your headline & first lines of About.")
     return suggestions
 
-# ---------- Download helper ----------
+# -------------------------
+# Download helper
+# -------------------------
 def get_download_link(text, filename="resume.txt"):
     b64 = base64.b64encode(text.encode()).decode()
     href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download extracted text</a>'
     return href
 
-# ---------- Session init ----------
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-if "current_result" not in st.session_state:
-    st.session_state.current_result = None
-if "scan_history" not in st.session_state:
-    st.session_state.scan_history = []
-if "paste_resume" not in st.session_state:
-    st.session_state.paste_resume = ""
+# -------------------------
+# UI helper: chips & small rendering
+# -------------------------
+def render_chips_html(words, kind="match", limit=100):
+    if not words:
+        return "<div class='small'>None</div>"
+    cls = "chip-match" if kind == "match" else "chip-miss"
+    html = " ".join([f"<span class='chip {cls}'>{w}</span>" for w in words[:limit]])
+    return html
 
-# ---------- Navigation helper ----------
-def navigate_to(page_name: str):
-    st.session_state.page = page_name
-
-# ---------- Header / Top-nav (centered, responsive) ----------
+# -------------------------
+# Top CSS including added spacing between nav buttons
+# -------------------------
 st.markdown("""
     <style>
     .header-wrap {
@@ -271,7 +294,7 @@ st.markdown("""
       font-weight: 600;
       min-width: 110px;
       font-size: 14px;
-      margin: 0 6px;         /* add breathing room around each button */
+      margin: 0 6px;         /* breathing room */
     }
     div.stButton > button:hover {
       background-color: #9932CC;
@@ -282,6 +305,8 @@ st.markdown("""
     .chip { display:inline-block; padding:6px 10px; margin:4px; border-radius:12px; font-size:13px; }
     .chip-match { background:#e6f4ea; color:#155724; border:1px solid #c6eed3; }
     .chip-miss { background:#fff0f0; color:#7a1a1a; border:1px solid #f5c6cb; }
+    .small { font-size:13px; color:#666; }
+    .score-box { background:#fff; padding:14px; border-radius:10px; border:1px solid #eee; text-align:center; }
     @media (max-width: 900px) {
       div.stButton > button { min-width: 96px; padding: 7px 12px; font-size: 13px; }
       .content-wrap { margin: 18px auto; max-width: 760px; }
@@ -293,14 +318,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# header with optional logo left (keeps visual balance) and centered nav
+# -------------------------
+# Header & centered nav (keeps your layout)
+# -------------------------
 cols = st.columns([1,6,1])
 with cols[0]:
     logo_path = "logo.png"
     if os.path.exists(logo_path):
         st.image(logo_path, width=56)
     else:
-        st.write("")  # placeholder to keep header centered
+        st.write("")
 with cols[1]:
     nav_items = [
         ("HOME", "home"),
@@ -316,11 +343,10 @@ with cols[1]:
     for i, (label, key) in enumerate(nav_items):
         with nav_cols[i]:
             if st.button(label, key=f"nav_{key}"):
-                navigate_to(key)
+                st.session_state.page = key
 with cols[2]:
     st.write("")
 
-# ---------- Smooth scroll helper ----------
 def smooth_scroll_to_current():
     page_id = st.session_state.get("page", "home")
     safe_page = str(page_id).replace('"', '')
@@ -339,7 +365,9 @@ def smooth_scroll_to_current():
     """
     st.markdown(scroll_js, unsafe_allow_html=True)
 
-# ---------- Pages (UI preserved, backend improved) ----------
+# -------------------------
+# Pages (preserve structure, improved backend)
+# -------------------------
 def page_home():
     st.markdown('<div id="section-home"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap center-text">', unsafe_allow_html=True)
@@ -364,26 +392,27 @@ def page_scanner():
         uploaded = st.file_uploader("", type=["pdf","docx","doc","txt"], key="upload_resume")
         st.markdown("---")
         st.markdown("**Or paste resume text (optional)**")
-        resume_text_manual = st.text_area("", height=220, key="paste_resume")
-        # keep session copy
-        if resume_text_manual is not None:
-            st.session_state.paste_resume = resume_text_manual
+        resume_text_manual = st.text_area("", height=220, key="paste_resume_area", value=st.session_state.get("paste_resume",""))
+        # update session copy safely (no crash because initialized)
+        st.session_state.paste_resume = resume_text_manual or ""
         if uploaded:
             st.info(f"Uploaded: {uploaded.name}")
     with right:
         st.markdown("**Paste Job Description (JD)**")
-        jd_text = st.text_area("", height=320, key="paste_jd")
+        jd_text = st.text_area("", height=320, key="paste_jd_area", value=st.session_state.get("paste_jd",""))
+        st.session_state.paste_jd = jd_text or ""
         ck_linkedin = st.checkbox("Also optimize for LinkedIn summary (produce suggestions)", value=False, key="ck_linkedin")
         weight = st.slider("Importance weight: match vs. readability", 0.0, 1.0, 0.7, key="weight_slider")
     st.markdown("")  # spacing
+
     if st.button("Scan / Analyze", key="scan_analyze"):
         # get resume text
-        uploaded_obj = uploaded  # local variable
+        uploaded_obj = uploaded
         if uploaded_obj:
             rtext = extract_text_from_uploaded(uploaded_obj) or ""
         else:
-            rtext = (st.session_state.get("paste_resume", "") or "").strip()
-        jd_val = (st.session_state.get("paste_jd", "") or "").strip()
+            rtext = (st.session_state.get("paste_resume","") or "").strip()
+        jd_val = (st.session_state.get("paste_jd","") or "").strip()
         if not rtext:
             st.warning("Please provide resume text by uploading a file or pasting it.")
             return
@@ -391,8 +420,9 @@ def page_scanner():
             st.warning("Please paste a job description to compare.")
             return
 
+        # compute results
         score = compute_match_score(rtext, jd_val)
-        matched, missing = get_keywords_and_missing(rtext, jd_val, top_n=200)
+        matched, missing, jd_freq = get_keywords_and_missing(rtext, jd_val, top_n=200)
         warnings = simple_ats_checks(rtext)
         suggestions = generate_actionable_suggestions(score, matched, missing, rtext)
         linkedin_suggestions = None
@@ -428,18 +458,11 @@ def page_scanner():
         return
     st.markdown("</div>", unsafe_allow_html=True)
 
-def render_chips(words, kind="match", limit=100):
-    if not words:
-        return "<div class='small'>None</div>"
-    cls = "chip-match" if kind == "match" else "chip-miss"
-    html = " ".join([f"<span class='chip {cls}'>{w}</span>" for w in words[:limit]])
-    return html
-
 def page_results():
     st.markdown('<div id="section-results"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    r = st.session_state.get("current_result")
     st.header("Match Results")
+    r = st.session_state.get("current_result")
     if not r:
         st.info("No result to display. Run a scan first from the Scanner page.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -448,38 +471,35 @@ def page_results():
     # Score card + quick suggestions
     col_score, col_detail = st.columns([1,2])
     with col_score:
-        # big visual score
         score_val = r.get("score", 0)
         color = "#28a745" if score_val >= 70 else "#ffc107" if score_val >= 40 else "#dc3545"
         st.markdown(f"""
-            <div style='background:#f6f0fb; padding:18px; border-radius:12px; text-align:center;'>
+            <div class='score-box'>
               <div style='font-size:36px; font-weight:800; color:{color};'>{score_val}%</div>
               <div style='color:gray; margin-top:6px;'>Match Score</div>
             </div>
         """, unsafe_allow_html=True)
-
     with col_detail:
         st.markdown("<div style='font-weight:600; margin-bottom:6px;'>Quick suggestions</div>", unsafe_allow_html=True)
         for s in r.get("suggestions", [])[:4]:
             st.write("• " + s)
 
-    # top keywords (compact)
+    # Top keywords compact
     st.markdown("### Top matches & gaps")
     matched = r.get("matched", [])
     missing = r.get("missing", [])
-    # show top 10 each
     st.markdown("<div style='display:flex; gap:18px; flex-wrap:wrap;'>", unsafe_allow_html=True)
     st.markdown("<div style='flex:1; min-width:300px;'>", unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>✅ Top used keywords</div>", unsafe_allow_html=True)
-    st.markdown(render_chips(matched, kind="match", limit=10), unsafe_allow_html=True)
+    st.markdown(render_chips_html(matched, kind="match", limit=10), unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("<div style='flex:1; min-width:300px;'>", unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>❌ Top missing keywords (prioritized)</div>", unsafe_allow_html=True)
-    st.markdown(render_chips(missing, kind="miss", limit=10), unsafe_allow_html=True)
+    st.markdown(render_chips_html(missing, kind="miss", limit=10), unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # compact ATS & LinkedIn suggestions
+    # ATS & LinkedIn
     st.markdown("<br/>")
     col_a, col_b = st.columns([1,1])
     with col_a:
@@ -496,15 +516,15 @@ def page_results():
                 st.write("• " + s)
         else:
             st.write("• Start headline with role + impact.")
-            st.write("• Add top 4 JD keywords in the About section.")
+            st.write("• Add top 4 JD keywords in About section.")
 
-    # details expander
+    # Detailed analysis expander
     st.markdown("---")
     with st.expander("View detailed analysis and full lists"):
         st.markdown("**All matched keywords (from JD)**")
-        st.markdown(render_chips(matched, kind="match", limit=500), unsafe_allow_html=True)
+        st.markdown(render_chips_html(matched, kind="match", limit=500), unsafe_allow_html=True)
         st.markdown("**All missing keywords (from JD)**")
-        st.markdown(render_chips(missing, kind="miss", limit=500), unsafe_allow_html=True)
+        st.markdown(render_chips_html(missing, kind="miss", limit=500), unsafe_allow_html=True)
         st.markdown("**Resume excerpt**")
         st.code(r.get("resume_text_excerpt", "")[:8000])
         st.markdown(get_download_link(r.get("resume_text_excerpt",""), filename="extracted_resume.txt"), unsafe_allow_html=True)
@@ -524,7 +544,6 @@ def page_dashboard():
         st.info("No scans yet. Run a scan on the Scanner page.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    # show as clean table
     rows = []
     for item in history:
         rows.append({
@@ -548,38 +567,38 @@ def page_cover_letter():
     cover_file = st.file_uploader("", type=["pdf","docx","doc","txt"], key="cover_upload")
     st.markdown("---")
     st.markdown("**Or paste cover letter text**")
-    cover_text = st.text_area("", height=260, key="cover_text")
+    cover_text = st.text_area("", height=260, key="cover_text_area", value=st.session_state.get("paste_cover_letter",""))
+    st.session_state.paste_cover_letter = cover_text or ""
     st.markdown("**(Optional)** Paste Job Description for contextual suggestions")
-    cover_jd = st.text_area("", height=160, key="cover_jd")
+    cover_jd = st.text_area("", height=160, key="cover_jd_area", value=st.session_state.get("paste_cover_jd",""))
+    st.session_state.paste_cover_jd = cover_jd or ""
     if st.button("Analyze Cover Letter", key="analyze_cover"):
         if cover_file:
             ctext = extract_text_from_uploaded(cover_file) or ""
         else:
-            ctext = (st.session_state.get("cover_text", "") or "").strip()
+            ctext = (st.session_state.get("paste_cover_letter","") or "").strip()
         if not ctext:
             st.warning("Please upload or paste a cover letter.")
             return
         tips = []
-        # opening line
+        # opening line check
         first_line = ""
         for ln in ctext.splitlines():
             if ln.strip():
                 first_line = ln.strip()
                 break
         if not first_line or len(first_line.split()) < 6:
-            tips.append("Start with a strong one-line opener mentioning the role & impact.")
+            tips.append("Start with a strong one-line opener mentioning role & impact.")
         if len(ctext.split()) < 160:
-            tips.append("Cover letter is short. Aim for ~200–350 words for good context.")
-        # JD keyword overlap
+            tips.append("Cover letter is short — aim for ~200–350 words.")
         if cover_jd and cover_jd.strip():
-            matched, missing = get_keywords_and_missing(ctext, cover_jd, top_n=80)
+            matched, missing, _ = get_keywords_and_missing(ctext, cover_jd, top_n=80)
             tips.append("Keywords from JD present: " + (", ".join(matched[:8]) or "None"))
             if missing:
                 tips.append("Consider adding (priority): " + ", ".join(missing[:8]))
-        # quant
         has_q, nums = detect_quantifications(ctext)
         if not has_q:
-            tips.append("Add 1–2 quantified achievements (numbers or %) to strengthen impact.")
+            tips.append("Add 1–2 quantified achievements to strengthen impact.")
         else:
             tips.append("Quantified items found: " + ", ".join(nums[:5]))
         st.success("Cover letter analysis complete.")
@@ -592,8 +611,9 @@ def page_linkedin():
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
     st.header("LinkedIn Optimizer")
     st.info("Paste your LinkedIn 'About' summary and an optional JD for contextual suggestions.")
-    summary = st.text_area("Paste LinkedIn Summary", height=260, key="linkedin_summary")
-    jd = st.text_area("Paste Job Description (optional)", height=200, key="linkedin_jd")
+    summary = st.text_area("Paste LinkedIn Summary", height=260, key="linkedin_summary_area", value=st.session_state.get("paste_linkedin",""))
+    st.session_state.paste_linkedin = summary or ""
+    jd = st.text_area("Paste Job Description (optional)", height=200, key="linkedin_jd_area")
     if st.button("Optimize LinkedIn", key="opt_linkedin"):
         if not summary.strip():
             st.warning("Please paste your LinkedIn summary.")
@@ -602,7 +622,7 @@ def page_linkedin():
         suggestions.append("Start with role + impact in the first sentence.")
         suggestions.append("Add top 4 technical keywords from JD near the top (if applicable).")
         if jd.strip():
-            matched, missing = get_keywords_and_missing(summary, jd, top_n=40)
+            matched, missing, _ = get_keywords_and_missing(summary, jd, top_n=40)
             suggestions.append(f"Keywords present: {', '.join(matched[:8])}" if matched else "No JD keywords found in summary.")
             if missing:
                 suggestions.append(f"Consider adding: {', '.join(missing[:8])}")
@@ -641,7 +661,7 @@ def page_tracker():
 def page_account():
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Account — simplified auth")
+    st.header("Account — simplified auth (session-only)")
     if st.session_state.get("user"):
         st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
         if st.button("Logout", key="logout_btn"):
@@ -650,7 +670,7 @@ def page_account():
             return
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    # Registration
+
     st.subheader("Sign Up")
     su_name = st.text_input("Full name", key="su_name")
     su_email = st.text_input("Email", key="su_email")
@@ -659,25 +679,27 @@ def page_account():
         if bcrypt:
             hashed = bcrypt.hash(su_pwd or "temp123")
         else:
-            hashed = "session-placeholder"
+            hashed = "session-temp"
         st.session_state.last_registration = {"name": su_name, "email": su_email, "hashed": hashed}
         st.session_state.last_login_prefill = {"email": su_email or "", "password": su_pwd or ""}
-        st.success("Registration successful. Please log in (session-only).")
+        st.success("Registration saved to session. Please log in below.")
+
     st.markdown("---")
     st.subheader("Login")
     li_email = st.text_input("Email", key="li_email", value=st.session_state.last_login_prefill.get("email",""))
     li_pwd = st.text_input("Password", type="password", key="li_pwd", value=st.session_state.last_login_prefill.get("password",""))
     if st.button("Login", key="login_btn"):
-        user = {"id": 1, "name": st.session_state.last_registration.get("name","Guest") if st.session_state.last_registration else "Guest", "email": li_email}
+        user = {"id": 1, "name": (st.session_state.last_registration.get("name") if st.session_state.last_registration else "Guest"), "email": li_email}
         st.session_state.user = user
-        st.success("Logged in successfully.")
+        st.success("Logged in successfully (session-only).")
         st.session_state.page = "dashboard"
         return
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Router ----------
-page = st.session_state.page
-
+# -------------------------
+# Router
+# -------------------------
+page = st.session_state.get("page", "home")
 if page == "home":
     page_home()
 elif page == "scanner":
@@ -697,5 +719,5 @@ elif page == "account":
 else:
     page_home()
 
-# scroll to the section for smooth UX
+# Smooth scroll
 smooth_scroll_to_current()
