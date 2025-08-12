@@ -351,8 +351,19 @@ st.markdown("""
 <style>
 :root { --purple: #6c63ff; --purple-2: #5a54e6; }
 body { font-family: Inter, Arial, sans-serif; }
+/* center all text */
+html, body, [class*="css"] {
+    text-align: center !important;
+}
+
+/* horizontal nav fallback container (kept for compatibility) */
+.nav-wrapper { display:flex; justify-content:center; margin-bottom:12px; }
+
+/* purple Streamlit buttons */
 div.stButton > button { background-color: var(--purple) !important; color: white !important; padding: 10px 18px !important; border-radius:10px !important; border:none !important; font-weight:700 !important; font-size:16px !important; min-width:120px; }
 div.stButton > button:hover { filter: brightness(0.98); transform: translateY(-1px); }
+
+/* content */
 .content-wrap { max-width:1150px; margin:20px auto; padding: 12px; }
 .center-card { text-align:center; padding:22px; background:#fbfcff; border-radius:12px; border:1px solid #eef2ff; }
 .metric-row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-bottom:16px; }
@@ -360,43 +371,65 @@ div.stButton > button:hover { filter: brightness(0.98); transform: translateY(-1
 .kv { font-weight:700; margin-bottom:6px; font-size:15px; }
 .small { color:#666; font-size:14px; }
 .score-circle { width:120px; height:120px; border-radius:50%; background:var(--purple); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:28px; margin:12px auto; box-shadow: 0 6px 18px rgba(108,99,255,0.18); }
-@media (max-width: 720px) {
-  div.stButton > button { font-size:15px !important; padding:10px !important; }
-  .score-circle { width:100px; height:100px; font-size:24px; }
-}
+.badge-good { color:#155724; background:#e6f4ea; padding:6px 10px; border-radius:8px; display:inline-block; margin-right:8px; }
+.badge-bad { color:#721c24; background:#f8d7da; padding:6px 10px; border-radius:8px; display:inline-block; margin-right:8px; }
+
+/* skills table */
 table.skills { width:100%; border-collapse:collapse; margin-top:8px;}
-table.skills th, table.skills td { border:1px solid #eee; padding:8px; text-align:left; vertical-align:top; font-size:14px;}
+table.skills th, table.skills td { border:1px solid #eee; padding:8px; text-align:left; vertical-align:top; font-size:14px; }
+
+/* responsive tweaks */
+@media (max-width: 960px) {
+  div.stButton > button { font-size:15px !important; padding:10px !important; min-width:92px !important; }
+  .score-circle { width:100px; height:100px; font-size:24px; }
+  .content-wrap { padding-left:12px; padding-right:12px; }
+}
+@media (max-width: 520px) {
+  h1 { font-size:22px !important; }
+  .small { font-size:13px !important; }
+  .score-circle { width:88px; height:88px; font-size:20px; }
+}
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------
-# Header / Nav
+# Header / Nav (REPLACED with purple horizontal nav)
 # -------------------------
-cols = st.columns([1, 6, 1])
-with cols[0]:
-    logo_path = "logo.png"
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=56)
-    else:
-        st.write("")
-with cols[1]:
-    nav_items = [("HOME","home"), ("Scanner","scanner"), ("Results","results"), ("Dashboard","dashboard"),
-                 ("Cover Letter","cover_letter"), ("LinkedIn","linkedin"), ("Job Tracker","job_tracker"), ("Account","account")]
-    nav_cols = st.columns([1]*len(nav_items))
-    for i, (label, key) in enumerate(nav_items):
-        with nav_cols[i]:
-            if st.button(label, key=f"nav_{key}"):
-                st.session_state.page = key
-with cols[2]:
-    st.write("")
+pages = [
+    ("HOME", "home"),
+    ("Scanner", "scanner"),
+    ("Results", "results"),
+    ("Dashboard", "dashboard"),
+    ("Cover Letter", "cover_letter"),
+    ("LinkedIn", "linkedin"),
+    ("Job Tracker", "job_tracker"),
+    ("Account", "account"),
+]
 
+# Build scrollable nav bar via HTML buttons (uses query param navigation)
+nav_html = '<div style="display:flex; gap:10px; overflow-x:auto; padding:10px 12px; justify-content:center; align-items:center; white-space:nowrap; margin-bottom:8px;">'
+for label, key in pages:
+    nav_html += f'<button onclick="window.location.href = window.location.pathname + \'?page={key}\'" style="background:#6c63ff; color:white; border:none; padding:10px 14px; border-radius:10px; font-weight:700; cursor:pointer; min-width:110px;">{label}</button>'
+nav_html += '</div>'
+st.markdown(nav_html, unsafe_allow_html=True)
+
+# read query param for page
+qp = st.experimental_get_query_params()
+if "page" in qp:
+    requested = qp["page"][0]
+    # keep session page in sync
+    st.session_state.page = requested
+
+# -------------------------
+# render_result_block (kept unchanged)
+# -------------------------
 def render_result_block(r):
     st.markdown('<div class="metric-row">', unsafe_allow_html=True)
     st.markdown(f'<div class="score-circle">{r["score"]}%</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div id="section-overview" class="section-box">', unsafe_allow_html=True)
-    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center'><div><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div><div class='small'>Scored using keyword coverage & document similarity</div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap'><div style='min-width:160px'><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div><div class='small'>Scored using keyword coverage & document similarity</div></div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div id="section-search" class="section-box">', unsafe_allow_html=True)
@@ -677,6 +710,7 @@ def page_account():
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
     st.header("Account")
+    # Accept-any-credentials behaviour (no DB)
     if st.session_state.get("user"):
         st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
         if st.button("Logout", key="logout_btn"):
@@ -686,7 +720,6 @@ def page_account():
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # Accept-any-credentials behaviour (no DB)
     st.subheader("Sign Up (optional)")
     su_name = st.text_input("Full name", key="su_name")
     su_email = st.text_input("Email", key="su_email")
