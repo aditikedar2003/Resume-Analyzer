@@ -1,14 +1,10 @@
-
-
-
-
 # streamlit_app.py
 """
 Resume Analyzer Pro — Jobscan-style single-file Streamlit app (no DB).
-- No DB; session-state only.
-- Accept-any-credentials account (no one blocked).
+- Session-state only.
+- Free access for everyone (no login/register).
 - Purple/responsive buttons, centered metrics.
-- Fixed regex and removed st.experimental_rerun() to avoid AttributeError.
+- Keeps resume parsing & JD scanning logic unchanged.
 """
 
 import streamlit as st
@@ -47,7 +43,6 @@ st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="w
 # --- Defaults for session_state ---
 DEFAULTS = {
     "page": "home",
-    "user": None,
     "scan_history": [],
     "current_result": None,
     "paste_resume": "",
@@ -349,48 +344,69 @@ def render_chip_html(label, count, color="#f0f0f0", link_id=None):
     return f'<div style="{style}">{label}<div style="font-size:14px; font-weight:600; color:#222; margin-top:6px">{count}</div></div>'
 
 # -------------------------
-# Top CSS (responsive purple buttons, centered text)
+# Top CSS (responsive purple buttons, centered nav)
 # -------------------------
 st.markdown("""
 <style>
-:root { --purple: #6c63ff; --purple-2: #5a54e6; }
-body { font-family: Inter, Arial, sans-serif; }
-div.stButton > button { background-color: var(--purple) !important; color: white !important; padding: 10px 18px !important; border-radius:10px !important; border:none !important; font-weight:700 !important; font-size:16px !important; min-width:120px; }
+:root { --purple: #6c63ff; --purple-2: #5a54e6; --bg: #fbfcff; --muted: #666; }
+html, body, [class*="css"]  { font-family: Inter, Arial, sans-serif; }
+header { margin-bottom: 8px; }
+
+/* Buttons */
+div.stButton > button { background-color: var(--purple) !important; color: white !important; padding: 12px 20px !important; border-radius:12px !important; border:none !important; font-weight:700 !important; font-size:15px !important; min-width:130px; }
 div.stButton > button:hover { filter: brightness(0.98); transform: translateY(-1px); }
-.content-wrap { max-width:1150px; margin:20px auto; padding: 12px; }
-.center-card { text-align:center; padding:22px; background:#fbfcff; border-radius:12px; border:1px solid #eef2ff; }
+
+/* Nav container centered with wrapping on small screens */
+.nav-wrap { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; align-items:center; margin:18px 0; }
+.content-wrap { max-width:1150px; margin:6px auto 28px; padding: 12px; }
+.center-card { text-align:center; padding:28px; background:var(--bg); border-radius:12px; border:1px solid #eef2ff; }
 .metric-row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-bottom:16px; }
 .section-box { padding:14px; border-radius:10px; border:1px solid #eee; background:#fff; margin-bottom:12px; box-shadow: 0 1px 6px rgba(20,20,20,0.03); }
 .kv { font-weight:700; margin-bottom:6px; font-size:15px; }
-.small { color:#666; font-size:14px; }
+.small { color:var(--muted); font-size:14px; }
 .score-circle { width:120px; height:120px; border-radius:50%; background:var(--purple); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:28px; margin:12px auto; box-shadow: 0 6px 18px rgba(108,99,255,0.18); }
-@media (max-width: 720px) {
-  div.stButton > button { font-size:15px !important; padding:10px !important; }
-  .score-circle { width:100px; height:100px; font-size:24px; }
+
+/* small screens */
+@media (max-width: 900px) {
+  div.stButton > button { min-width:110px; font-size:14px !important; padding:10px 14px !important; }
+  .score-circle { width:100px; height:100px; font-size:22px; }
 }
+
+/* table */
 table.skills { width:100%; border-collapse:collapse; margin-top:8px;}
-table.skills th, table.skills td { border:1px solid #eee; padding:8px; text-align:left; vertical-align:top; font-size:14px;}
+table.skills th, table.skills td { border:1px solid #eee; padding:8px; text-align:left; vertical-align:top; font-size:14px; }
+
+/* subtle badges */
+.badge-good { color:#064e3b; background:#ecfdf5; padding:8px; border-radius:8px; display:inline-block; margin-bottom:6px; }
+.badge-bad { color:#7c2d12; background:#fff7ed; padding:8px; border-radius:8px; display:inline-block; margin-bottom:6px; }
+
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------
 # Header / Nav
 # -------------------------
-cols = st.columns([1, 6, 1])
+# Top logo + centered nav
+cols = st.columns([1, 8, 1])
 with cols[0]:
     logo_path = "logo.png"
     if os.path.exists(logo_path):
         st.image(logo_path, width=56)
     else:
         st.write("")
+
 with cols[1]:
+    # Render nav buttons horizontally and centered
+    st.markdown('<div class="nav-wrap">', unsafe_allow_html=True)
+    # list of (label, page_key)
     nav_items = [("HOME","home"), ("Scanner","scanner"), ("Results","results"), ("Dashboard","dashboard"),
                  ("Cover Letter","cover_letter"), ("LinkedIn","linkedin"), ("Job Tracker","job_tracker"), ("Account","account")]
-    nav_cols = st.columns([1]*len(nav_items))
-    for i, (label, key) in enumerate(nav_items):
-        with nav_cols[i]:
-            if st.button(label, key=f"nav_{key}"):
-                st.session_state.page = key
+    # create buttons (they will wrap on small screens)
+    for label, key in nav_items:
+        if st.button(label, key=f"nav_{key}"):
+            st.session_state.page = key
+    st.markdown('</div>', unsafe_allow_html=True)
+
 with cols[2]:
     st.write("")
 
@@ -400,7 +416,11 @@ def render_result_block(r):
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div id="section-overview" class="section-box">', unsafe_allow_html=True)
-    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center'><div><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div><div class='small'>Scored using keyword coverage & document similarity</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap'>"
+        f"<div><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div>"
+        f"<div class='small'>Scored using keyword coverage & document similarity</div></div>",
+        unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div id="section-search" class="section-box">', unsafe_allow_html=True)
@@ -521,7 +541,7 @@ def page_scanner():
         ck_linkedin = st.checkbox("Also show LinkedIn suggestions", value=False, key="opt_linkedin")
     st.markdown("")
 
-    # Scan button: run analysis inline (no rerun)
+    # Scan button: run analysis inline
     if st.button("Scan / Analyze", key="do_scan"):
         if uploaded:
             rtext = extract_text_from_uploaded(uploaded) or ""
@@ -680,32 +700,9 @@ def page_tracker():
 def page_account():
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-    st.header("Account")
-    if st.session_state.get("user"):
-        st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
-        if st.button("Logout", key="logout_btn"):
-            st.session_state.user = None
-            st.session_state.page = "home"
-            st.success("Logged out.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    # Accept-any-credentials behaviour (no DB)
-    st.subheader("Sign Up (optional)")
-    su_name = st.text_input("Full name", key="su_name")
-    su_email = st.text_input("Email", key="su_email")
-    su_pwd = st.text_input("Password (any)", type="password", key="su_pwd")
-    if st.button("Register", key="register_btn"):
-        st.session_state.user = {"name": su_name or "User", "email": su_email or ""}
-        st.success("Registered. You are signed in.")
-
-    st.markdown("---")
-    st.subheader("Login (press to continue)")
-    li_email = st.text_input("Email", key="li_email", value="")
-    li_pwd = st.text_input("Password (any)", type="password", key="li_pwd", value="")
-    if st.button("Login", key="login_btn"):
-        st.session_state.user = {"name": li_email.split("@")[0] if li_email else "User", "email": li_email}
-        st.success("Signed in.")
+    st.header("Account — Free Access")
+    st.success("This app is open and free to use — no login required.")
+    st.markdown("All features are available without registering. Your data is stored only in session state while you use the app.", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --- Router ---
