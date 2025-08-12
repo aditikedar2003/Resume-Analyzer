@@ -1,11 +1,14 @@
+
+
+
+
 # streamlit_app.py
 """
 Resume Analyzer Pro — Jobscan-style single-file Streamlit app (no DB).
 - No DB; session-state only.
-- Free access for everyone (no login checks blocking users).
+- Accept-any-credentials account (no one blocked).
 - Purple/responsive buttons, centered metrics.
-- Fixed regex, removed st.experimental_rerun(), fixed nav click handling.
-- All original resume parsing & JD scanning logic preserved.
+- Fixed regex and removed st.experimental_rerun() to avoid AttributeError.
 """
 
 import streamlit as st
@@ -44,7 +47,7 @@ st.set_page_config(page_title="Resume Analyzer Pro", page_icon="🚀", layout="w
 # --- Defaults for session_state ---
 DEFAULTS = {
     "page": "home",
-    "user": {"name": "Guest", "email": ""},  # free access for everyone
+    "user": None,
     "scan_history": [],
     "current_result": None,
     "paste_resume": "",
@@ -350,103 +353,73 @@ def render_chip_html(label, count, color="#f0f0f0", link_id=None):
 # -------------------------
 st.markdown("""
 <style>
-:root { --purple: #6c63ff; --purple-2: #5a54e6; --muted: #6b7280; }
+:root { --purple: #6c63ff; --purple-2: #5a54e6; }
 body { font-family: Inter, Arial, sans-serif; }
-/* Buttons */
-div.stButton > button { background-color: var(--purple) !important; color: white !important; padding: 10px 18px !important; border-radius:12px !important; border:none !important; font-weight:700 !important; font-size:15px !important; min-width:120px; }
+div.stButton > button { background-color: var(--purple) !important; color: white !important; padding: 10px 18px !important; border-radius:10px !important; border:none !important; font-weight:700 !important; font-size:16px !important; min-width:120px; }
 div.stButton > button:hover { filter: brightness(0.98); transform: translateY(-1px); }
-/* container */
-.content-wrap { max-width:1150px; margin:24px auto; padding: 12px; }
-.center-card { text-align:center; padding:28px; background:#fbfcff; border-radius:12px; border:1px solid #eef2ff; box-shadow: 0 6px 20px rgba(16,24,40,0.04); }
-.metric-row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-bottom:18px; }
-.section-box { padding:16px; border-radius:10px; border:1px solid #eee; background:#fff; margin-bottom:14px; box-shadow: 0 1px 6px rgba(20,20,20,0.03); }
-.kv { font-weight:700; margin-bottom:6px; font-size:15px; color: #111827; }
-.small { color:var(--muted); font-size:14px; }
+.content-wrap { max-width:1150px; margin:20px auto; padding: 12px; }
+.center-card { text-align:center; padding:22px; background:#fbfcff; border-radius:12px; border:1px solid #eef2ff; }
+.metric-row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-bottom:16px; }
+.section-box { padding:14px; border-radius:10px; border:1px solid #eee; background:#fff; margin-bottom:12px; box-shadow: 0 1px 6px rgba(20,20,20,0.03); }
+.kv { font-weight:700; margin-bottom:6px; font-size:15px; }
+.small { color:#666; font-size:14px; }
 .score-circle { width:120px; height:120px; border-radius:50%; background:var(--purple); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:28px; margin:12px auto; box-shadow: 0 6px 18px rgba(108,99,255,0.18); }
-/* responsive */
-@media (max-width: 900px) {
-  div.stButton > button { font-size:14px !important; padding:10px 14px !important; min-width:96px; }
-  .content-wrap { padding:10px; margin:12px; }
-  .score-circle { width:100px; height:100px; font-size:22px; }
-}
-@media (max-width: 520px) {
-  .center-card { padding:18px; }
-  .score-circle { width:88px; height:88px; font-size:20px; }
+@media (max-width: 720px) {
+  div.stButton > button { font-size:15px !important; padding:10px !important; }
+  .score-circle { width:100px; height:100px; font-size:24px; }
 }
 table.skills { width:100%; border-collapse:collapse; margin-top:8px;}
 table.skills th, table.skills td { border:1px solid #eee; padding:8px; text-align:left; vertical-align:top; font-size:14px;}
-/* keep nav buttons clickable and horizontally scrollable if many */
-.nav-row { display:flex; gap:12px; overflow-x:auto; padding:18px 0; justify-content:center; -webkit-overflow-scrolling:touch; }
-.nav-row button { white-space:nowrap; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------
-# Header / Nav (use on_click handlers to change pages reliably)
+# Header / Nav
 # -------------------------
-def set_page(p):
-    st.session_state.page = p
+cols = st.columns([1, 6, 1])
+with cols[0]:
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=56)
+    else:
+        st.write("")
+with cols[1]:
+    nav_items = [("HOME","home"), ("Scanner","scanner"), ("Results","results"), ("Dashboard","dashboard"),
+                 ("Cover Letter","cover_letter"), ("LinkedIn","linkedin"), ("Job Tracker","job_tracker"), ("Account","account")]
+    nav_cols = st.columns([1]*len(nav_items))
+    for i, (label, key) in enumerate(nav_items):
+        with nav_cols[i]:
+            if st.button(label, key=f"nav_{key}"):
+                st.session_state.page = key
+with cols[2]:
+    st.write("")
 
-nav_items = [("HOME","home"), ("Scanner","scanner"), ("Results","results"), ("Dashboard","dashboard"),
-             ("Cover Letter","cover_letter"), ("LinkedIn","linkedin"), ("Job Tracker","job_tracker"), ("Account","account")]
-
-# Top header and nav area
-with st.container():
-    left, mid, right = st.columns([1, 8, 1])
-    with left:
-        logo_path = "logo.png"
-        if os.path.exists(logo_path):
-            st.image(logo_path, width=56)
-        else:
-            st.write("")
-    with mid:
-        # render a horizontal nav row that is scrollable on small screens
-        nav_html = '<div class="nav-row">'
-        # We'll use Streamlit buttons for behavior; but ensure layout centered.
-        # Create a column layout with one column and then use st.button(s) inline
-        for label, key in nav_items:
-            # Each button uses an on_click callback that sets session_state.page
-            st.button(label, key=f"nav_{key}", on_click=set_page, args=(key,))
-        nav_html += '</div>'
-        # optional spacer
-    with right:
-        # show signed-in user (free access)
-        user = st.session_state.get("user", {"name": "Guest", "email": ""})
-        st.markdown(f"<div style='text-align:right; color: #374151; font-weight:600'>Signed in as {user.get('name')}</div>", unsafe_allow_html=True)
-
-# -------------------------
-# Result rendering helper
-# -------------------------
 def render_result_block(r):
-    # big centered score
     st.markdown('<div class="metric-row">', unsafe_allow_html=True)
     st.markdown(f'<div class="score-circle">{r["score"]}%</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Overview
     st.markdown('<div id="section-overview" class="section-box">', unsafe_allow_html=True)
-    st.markdown(f"<div style='display:flex; flex-wrap:wrap; gap:12px; justify-content:space-between; align-items:center'><div><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div><div class='small'>Scored using keyword coverage & document similarity</div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center'><div><div style='font-size:20px; font-weight:800'>{r['score']}%</div><div class='small'>Overall Match Score</div></div><div class='small'>Scored using keyword coverage & document similarity</div></div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Searchability
     st.markdown('<div id="section-search" class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Searchability</div>", unsafe_allow_html=True)
     ci = r["contact_info"]
     if ci["address"]:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#e6f4ea; color:#155724;'>Address found</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-good'>Address found</div>", unsafe_allow_html=True)
     else:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#f8d7da; color:#721c24;'>Address not found — add city or full address</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-bad'>Address not found — add city or full address</div>", unsafe_allow_html=True)
     if ci["email"]:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#e6f4ea; color:#155724; margin-left:8px;'>Email found</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-good'>Email found</div>", unsafe_allow_html=True)
     else:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#f8d7da; color:#721c24; margin-left:8px;'>Email missing</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-bad'>Email missing</div>", unsafe_allow_html=True)
     if ci["phone"]:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#e6f4ea; color:#155724; margin-left:8px;'>Phone number found</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-good'>Phone number found</div>", unsafe_allow_html=True)
     else:
-        st.markdown("<div style='display:inline-block; padding:6px 10px; border-radius:8px; background:#f8d7da; color:#721c24; margin-left:8px;'>Phone missing</div>", unsafe_allow_html=True)
+        st.markdown("<div class='badge-bad'>Phone missing</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Skills sections
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Top matched / missing skills</div>", unsafe_allow_html=True)
     hard = r["cat"]["hard"]
@@ -465,14 +438,12 @@ def render_result_block(r):
         st.write(", ".join(list(soft["missing"].keys())[:8]))
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Recruiter tips
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Recruiter Tips</div>", unsafe_allow_html=True)
     for t in r["suggestions"]:
         st.write("• " + t)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Formatting
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Formatting</div>", unsafe_allow_html=True)
     fm = simple_ats_checks(r["full_resume"])
@@ -483,7 +454,6 @@ def render_result_block(r):
         st.success("No obvious ATS formatting problems found.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Skills table
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Skills — Resume vs Job Description (sample)</div>", unsafe_allow_html=True)
     jd_freq = r["cat"]["jd_freq"]
@@ -496,7 +466,6 @@ def render_result_block(r):
     st.markdown("</table>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Additional insights
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     secs = r["sections"]
     st.markdown("<div style='font-weight:700; margin-bottom:8px;'>Additional Insights</div>", unsafe_allow_html=True)
@@ -511,7 +480,6 @@ def render_result_block(r):
     st.markdown(f"• Word count: <b>{len(r['full_resume'].split())}</b>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Resume excerpt + download
     st.markdown('<div class="section-box">', unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Resume excerpt</div>", unsafe_allow_html=True)
     st.code(r.get("resume_excerpt", "")[:8000])
@@ -710,13 +678,34 @@ def page_tracker():
     st.markdown("</div>", unsafe_allow_html=True)
 
 def page_account():
-    # simplified account page — free access, show guest or name
     st.markdown('<div id="section-account"></div>', unsafe_allow_html=True)
     st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
     st.header("Account")
-    user = st.session_state.get("user", {"name": "Guest", "email": ""})
-    st.success(f"Signed in as **{user.get('name')}** ({user.get('email')})")
-    st.markdown("<div class='small'>This app allows free session-only access to everyone — no blocking or validation required.</div>", unsafe_allow_html=True)
+    if st.session_state.get("user"):
+        st.success(f"Signed in as **{st.session_state.user.get('name')}** ({st.session_state.user.get('email')})")
+        if st.button("Logout", key="logout_btn"):
+            st.session_state.user = None
+            st.session_state.page = "home"
+            st.success("Logged out.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    # Accept-any-credentials behaviour (no DB)
+    st.subheader("Sign Up (optional)")
+    su_name = st.text_input("Full name", key="su_name")
+    su_email = st.text_input("Email", key="su_email")
+    su_pwd = st.text_input("Password (any)", type="password", key="su_pwd")
+    if st.button("Register", key="register_btn"):
+        st.session_state.user = {"name": su_name or "User", "email": su_email or ""}
+        st.success("Registered. You are signed in.")
+
+    st.markdown("---")
+    st.subheader("Login (press to continue)")
+    li_email = st.text_input("Email", key="li_email", value="")
+    li_pwd = st.text_input("Password (any)", type="password", key="li_pwd", value="")
+    if st.button("Login", key="login_btn"):
+        st.session_state.user = {"name": li_email.split("@")[0] if li_email else "User", "email": li_email}
+        st.success("Signed in.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --- Router ---
